@@ -24,15 +24,47 @@ export function useWebSocket(customUrl?: string) {
   const processedAlertIds = useRef<Set<string>>(new Set());
   const { playManaSound, playRankUpSound } = useSoundEffects();
 
-  // Dynamic host determination so LAN/OBS/localhost setups work automatically
+  // Dynamic host determination so LAN, OBS, Vercel, and cloud backends work automatically
   const getEndpoints = useCallback(() => {
+    if (customUrl) {
+      const httpOrigin = customUrl.replace(/^ws(s)?:/, 'http$1:');
+      return { wsUrl: customUrl, httpOrigin };
+    }
+
+    // 1. Check URL query parameters: ?server=xxx or ?backend=xxx
+    const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+    const serverParam = urlParams?.get('server') || urlParams?.get('backend');
+
+    // 2. Check Vite environment variable: VITE_BACKEND_URL
+    const envBackend = (import.meta as any).env?.VITE_BACKEND_URL;
+
+    let targetHost = serverParam || envBackend;
+
+    if (targetHost) {
+      // Normalize targetHost (strip protocol and trailing slash)
+      targetHost = targetHost.replace(/^https?:\/\//, '').replace(/^wss?:\/\//, '').replace(/\/$/, '');
+      const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+      const isSecure = isHttps || targetHost.includes('onrender.com') || targetHost.includes('railway.app');
+      const wsProto = isSecure ? 'wss:' : 'ws:';
+      const httpProto = isSecure ? 'https:' : 'http:';
+      return {
+        wsUrl: `${wsProto}//${targetHost}`,
+        httpOrigin: `${httpProto}//${targetHost}`
+      };
+    }
+
+    // 3. Detect hostname and cloud hosting
     const hostname = typeof window !== 'undefined' ? (window.location.hostname || 'localhost') : 'localhost';
     const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
     const wsProto = isHttps ? 'wss:' : 'ws:';
     const httpProto = isHttps ? 'https:' : 'http:';
 
-    const wsUrl = customUrl || `${wsProto}//${hostname}:8080`;
-    const httpOrigin = `${httpProto}//${hostname}:8080`;
+    // If loaded from Vercel or Netlify, default OBS / local browser to connecting to local relay server
+    const isCloudHost = hostname.includes('vercel.app') || hostname.includes('netlify.app');
+    const effectiveHost = isCloudHost ? 'localhost' : hostname;
+
+    const wsUrl = `${wsProto}//${effectiveHost}:8080`;
+    const httpOrigin = `${httpProto}//${effectiveHost}:8080`;
     return { wsUrl, httpOrigin };
   }, [customUrl]);
 
