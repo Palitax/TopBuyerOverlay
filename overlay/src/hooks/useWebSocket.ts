@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { LeaderboardState, PurchaseEvent, WSMessage, WSMessageType } from '../types';
 import { useSoundEffects } from './useSoundEffects';
+import { getInitialDemoState, simulateClientPurchase } from '../utils/simulation';
 
 export type ConnectionStatus = 'connected' | 'connecting' | 'disconnected';
 
@@ -14,7 +15,14 @@ export interface RankUpEventPayload {
 
 export function useWebSocket(customUrl?: string) {
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
-  const [state, setState] = useState<LeaderboardState | null>(null);
+  const [state, setState] = useState<LeaderboardState>(() => {
+    try {
+      const saved = localStorage.getItem('whatnot_mana_demo_state');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return getInitialDemoState();
+  });
+
   const [latestPurchase, setLatestPurchase] = useState<PurchaseEvent | null>(null);
   const [latestRankUp, setLatestRankUp] = useState<RankUpEventPayload | null>(null);
 
@@ -41,7 +49,6 @@ export function useWebSocket(customUrl?: string) {
     let targetHost = serverParam || envBackend;
 
     if (targetHost) {
-      // Normalize targetHost (strip protocol and trailing slash)
       targetHost = targetHost.replace(/^https?:\/\//, '').replace(/^wss?:\/\//, '').replace(/\/$/, '');
       const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
       const isSecure = isHttps || targetHost.includes('onrender.com') || targetHost.includes('railway.app');
@@ -59,7 +66,6 @@ export function useWebSocket(customUrl?: string) {
     const wsProto = isHttps ? 'wss:' : 'ws:';
     const httpProto = isHttps ? 'https:' : 'http:';
 
-    // If loaded from Vercel or Netlify, default OBS / local browser to connecting to local relay server
     const isCloudHost = hostname.includes('vercel.app') || hostname.includes('netlify.app');
     const effectiveHost = isCloudHost ? 'localhost' : hostname;
 
@@ -80,6 +86,9 @@ export function useWebSocket(customUrl?: string) {
               leaderboard: msg.payload.leaderboard || []
             };
             setState(normalizedPayload);
+            try {
+              localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(normalizedPayload));
+            } catch (e) {}
           }
           break;
         }
@@ -88,7 +97,6 @@ export function useWebSocket(customUrl?: string) {
           const purchase: PurchaseEvent = msg.payload;
           if (!purchase) break;
 
-          // Deduplicate across WS and SSE streams
           if (purchase.id && processedAlertIds.current.has(purchase.id)) {
             break;
           }
@@ -102,8 +110,8 @@ export function useWebSocket(customUrl?: string) {
 
           setLatestPurchase(purchase);
 
-          if (state?.config.soundEnabled ?? true) {
-            playManaSound(state?.config.soundVolume ?? 0.7);
+          if (state?.config?.soundEnabled ?? true) {
+            playManaSound(state?.config?.soundVolume ?? 0.7);
           }
           break;
         }
@@ -124,20 +132,17 @@ export function useWebSocket(customUrl?: string) {
 
           setLatestRankUp(rankUp);
 
-          if (state?.config.soundEnabled ?? true) {
-            playRankUpSound(rankUp.newTier, state?.config.soundVolume ?? 0.8);
+          if (state?.config?.soundEnabled ?? true) {
+            playRankUpSound(rankUp.newTier, state?.config?.soundVolume ?? 0.8);
           }
           break;
         }
-
-        case 'PONG':
-          break;
 
         default:
           break;
       }
     },
-    [state?.config.soundEnabled, state?.config.soundVolume, playManaSound, playRankUpSound]
+    [state?.config?.soundEnabled, state?.config?.soundVolume, playManaSound, playRankUpSound]
   );
 
   // Connect WebSocket
@@ -172,20 +177,18 @@ export function useWebSocket(customUrl?: string) {
       };
 
       ws.onclose = () => {
-        console.log('[Realtime] WS disconnected. Retrying in 2.5s...');
         wsRef.current = null;
-        setStatus((curr) => (curr === 'connected' ? 'connecting' : curr));
+        setStatus('disconnected');
         reconnectTimeoutRef.current = window.setTimeout(() => {
           connectWs();
-        }, 2500);
+        }, 3000);
       };
 
-      ws.onerror = (err) => {
-        console.warn('[Realtime] WS error (SSE fallback remains active):', err);
+      ws.onerror = () => {
         ws.close();
       };
     } catch (e) {
-      console.warn('[Realtime] Could not create WebSocket:', e);
+      setStatus('disconnected');
     }
   }, [getEndpoints, handleIncomingMessage]);
 
@@ -201,7 +204,6 @@ export function useWebSocket(customUrl?: string) {
       sseRef.current = sse;
 
       sse.onopen = () => {
-        console.log('[Realtime] SSE event stream connected to:', `${httpOrigin}/api/events`);
         setStatus('connected');
       };
 
@@ -215,11 +217,10 @@ export function useWebSocket(customUrl?: string) {
       };
 
       sse.onerror = () => {
-        // EventSource will automatically attempt reconnection
-        console.warn('[Realtime] SSE connection interrupted; native auto-reconnect active');
+        // EventSource automatically reconnects
       };
     } catch (e) {
-      console.warn('[Realtime] SSE not supported or blocked:', e);
+      // Ignored if offline
     }
   }, [getEndpoints, handleIncomingMessage]);
 
@@ -227,37 +228,38 @@ export function useWebSocket(customUrl?: string) {
   const fetchCurrentState = useCallback(() => {
     const { httpOrigin } = getEndpoints();
     fetch(`${httpOrigin}/api/state`)
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error('HTTP error');
+        return res.json();
+      })
       .then((data) => {
         if (data) {
           const rawState = data.state || data;
           const leaderboard = data.leaderboard || rawState.leaderboard || [];
-          setState({
+          const merged: LeaderboardState = {
             ...rawState,
             leaderboard
-          });
+          };
+          setState(merged);
           setStatus('connected');
+          try {
+            localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(merged));
+          } catch (e) {}
         }
       })
-      .catch((err) => {
-        console.warn('[Realtime] Polling fetch error:', err);
+      .catch(() => {
+        // Keep current state or demo state
       });
   }, [getEndpoints]);
 
   useEffect(() => {
-    // 1. Fetch initial state immediately
     fetchCurrentState();
-
-    // 2. Connect WebSocket
     connectWs();
-
-    // 3. Connect Server-Sent Events (SSE) pipeline as dual-redundant stream
     connectSSE();
 
-    // 4. Background safety-net polling every 2.5 seconds
     const pollInterval = window.setInterval(() => {
       fetchCurrentState();
-    }, 2500);
+    }, 3000);
 
     return () => {
       if (reconnectTimeoutRef.current) {
@@ -275,35 +277,99 @@ export function useWebSocket(customUrl?: string) {
     };
   }, [connectWs, connectSSE, fetchCurrentState]);
 
-  const sendMessage = useCallback((type: WSMessageType, payload: any = {}) => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type,
-          payload,
-          timestamp: Date.now()
-        })
-      );
-    } else {
-      // If WebSocket is temporarily down, send via REST fallback
+  const sendMessage = useCallback(
+    (type: WSMessageType, payload: any = {}) => {
       const { httpOrigin } = getEndpoints();
+
+      // If WebSocket is open, send to backend
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({
+            type,
+            payload,
+            timestamp: Date.now()
+          })
+        );
+        return;
+      }
+
+      // Try REST fallback
       if (type === 'NEW_PURCHASE') {
         fetch(`${httpOrigin}/api/purchase`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
-        }).catch((err) => console.error('[Realtime] REST purchase fallback error:', err));
+        })
+          .then((res) => {
+            if (!res.ok) throw new Error('REST failed');
+          })
+          .catch(() => {
+            // Standalone Browser Simulation (e.g. running on Vercel without a local server)
+            console.log('[Realtime] Server offline: Executing purchase in browser simulation mode.');
+            setState((curr) => {
+              const result = simulateClientPurchase(curr, payload);
+              handleIncomingMessage({
+                type: 'PURCHASE_ALERT',
+                payload: result.event
+              });
+              if (result.isRankUp && result.rankUpPayload) {
+                handleIncomingMessage({
+                  type: 'RANK_UP_ALERT',
+                  payload: result.rankUpPayload
+                });
+              }
+              try {
+                localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(result.nextState));
+              } catch (e) {}
+              return result.nextState;
+            });
+          });
       } else if (type === 'RESET_SESSION') {
-        fetch(`${httpOrigin}/api/reset`, { method: 'POST' }).catch(console.error);
-      } else if (type === 'UPDATE_CONFIG') {
-        fetch(`${httpOrigin}/api/config`, {
+        fetch(`${httpOrigin}/api/reset`, { method: 'POST' })
+          .catch(() => {
+            const fresh = getInitialDemoState();
+            setState(fresh);
+            try {
+              localStorage.removeItem('whatnot_mana_demo_state');
+            } catch (e) {}
+          });
+      } else if (type === 'MANUAL_ADJUST') {
+        fetch(`${httpOrigin}/api/adjust`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
-        }).catch(console.error);
+        }).catch(() => {
+          setState((curr) => {
+            const { username, purchases } = payload;
+            const updated = curr.leaderboard.map((b) =>
+              b.username.toLowerCase() === username.toLowerCase()
+                ? { ...b, purchaseCount: purchases }
+                : b
+            );
+            const next = { ...curr, leaderboard: updated };
+            try {
+              localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(next));
+            } catch (e) {}
+            return next;
+          });
+        });
+      } else if (type === 'DELETE_USER') {
+        fetch(`${httpOrigin}/api/buyer/${payload.username}`, { method: 'DELETE' }).catch(() => {
+          setState((curr) => {
+            const updated = curr.leaderboard.filter(
+              (b) => b.username.toLowerCase() !== payload.username.toLowerCase()
+            );
+            const next = { ...curr, leaderboard: updated };
+            try {
+              localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(next));
+            } catch (e) {}
+            return next;
+          });
+        });
       }
-    }
-  }, [getEndpoints]);
+    },
+    [getEndpoints, handleIncomingMessage]
+  );
 
   const clearAlerts = useCallback(() => {
     setLatestPurchase(null);

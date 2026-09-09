@@ -151,15 +151,17 @@ export const AdminDeck: React.FC<AdminDeckProps> = ({ state, status, onSendMessa
                 className={`px-2.5 py-0.5 rounded-full text-xs font-semibold flex items-center gap-1.5 ${
                   status === 'connected'
                     ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                    : 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                    : 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
                 }`}
               >
                 <span
                   className={`w-2 h-2 rounded-full ${
-                    status === 'connected' ? 'bg-emerald-400 animate-ping' : 'bg-rose-400'
+                    status === 'connected' ? 'bg-emerald-400 animate-ping' : 'bg-sky-400'
                   }`}
                 />
-                {status === 'connected' ? 'Relay Server Verbunden' : 'Server Getrennt'}
+                {status === 'connected'
+                  ? 'Relay Server Verbunden'
+                  : 'Browser-Testmodus aktiv (Käufe direkt im Browser)'}
               </span>
             </div>
             <p className="text-slate-400 text-sm mt-1">
