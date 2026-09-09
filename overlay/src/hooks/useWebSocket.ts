@@ -14,6 +14,13 @@ export interface RankUpEventPayload {
 }
 
 const BROADCAST_BUS_NAME = 'top_buyer_mana_bus';
+const DEFAULT_CLOUD_ROOM = 'whatnot_mana_palitax_sync';
+
+export function getSyncRoom(): string {
+  if (typeof window === 'undefined') return DEFAULT_CLOUD_ROOM;
+  const params = new URLSearchParams(window.location.search);
+  return params.get('room') || localStorage.getItem('whatnot_mana_sync_room') || DEFAULT_CLOUD_ROOM;
+}
 
 export function useWebSocket(customUrl?: string) {
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
@@ -28,26 +35,23 @@ export function useWebSocket(customUrl?: string) {
   const [latestPurchase, setLatestPurchase] = useState<PurchaseEvent | null>(null);
   const [latestRankUp, setLatestRankUp] = useState<RankUpEventPayload | null>(null);
 
+  const clientIdRef = useRef<string>('client_' + Math.random().toString(36).substring(2, 9));
   const wsRef = useRef<WebSocket | null>(null);
-  const sseRef = useRef<EventSource | null>(null);
+  const cloudSseRef = useRef<EventSource | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
   const processedAlertIds = useRef<Set<string>>(new Set());
   const { playManaSound, playRankUpSound } = useSoundEffects();
 
-  // Dynamic host determination so LAN, OBS, Vercel, and cloud backends work automatically
+  // Dynamic host determination for optional local/cloud backend server
   const getEndpoints = useCallback(() => {
     if (customUrl) {
       const httpOrigin = customUrl.replace(/^ws(s)?:/, 'http$1:');
-      return { wsUrl: customUrl, httpOrigin };
+      return { wsUrl: customUrl, httpOrigin, hasDedicatedBackend: true };
     }
 
-    // 1. Check URL query parameters: ?server=xxx or ?backend=xxx
     const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
     const serverParam = urlParams?.get('server') || urlParams?.get('backend');
-
-    // 2. Check Vite environment variable: VITE_BACKEND_URL
     const envBackend = (import.meta as any).env?.VITE_BACKEND_URL;
-
     let targetHost = serverParam || envBackend;
 
     if (targetHost) {
@@ -58,25 +62,34 @@ export function useWebSocket(customUrl?: string) {
       const httpProto = isSecure ? 'https:' : 'http:';
       return {
         wsUrl: `${wsProto}//${targetHost}`,
-        httpOrigin: `${httpProto}//${targetHost}`
+        httpOrigin: `${httpProto}//${targetHost}`,
+        hasDedicatedBackend: true
       };
     }
 
-    // 3. Detect hostname and cloud hosting
     const hostname = typeof window !== 'undefined' ? (window.location.hostname || 'localhost') : 'localhost';
+    const isCloudHost = hostname.includes('vercel.app') || hostname.includes('netlify.app');
+    
+    // On Vercel without ?server param, we don't have a local backend port 8080 running in cloud
+    if (isCloudHost) {
+      return {
+        wsUrl: '',
+        httpOrigin: '',
+        hasDedicatedBackend: false
+      };
+    }
+
     const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
     const wsProto = isHttps ? 'wss:' : 'ws:';
     const httpProto = isHttps ? 'https:' : 'http:';
-
-    const isCloudHost = hostname.includes('vercel.app') || hostname.includes('netlify.app');
-    const effectiveHost = isCloudHost ? 'localhost' : hostname;
-
-    const wsUrl = `${wsProto}//${effectiveHost}:8080`;
-    const httpOrigin = `${httpProto}//${effectiveHost}:8080`;
-    return { wsUrl, httpOrigin };
+    return {
+      wsUrl: `${wsProto}//${hostname}:8080`,
+      httpOrigin: `${httpProto}//${hostname}:8080`,
+      hasDedicatedBackend: true
+    };
   }, [customUrl]);
 
-  // Unified message handler for both WebSocket and Server-Sent Events (SSE)
+  // Unified incoming message handler
   const handleIncomingMessage = useCallback(
     (msg: WSMessage) => {
       switch (msg.type) {
@@ -147,7 +160,111 @@ export function useWebSocket(customUrl?: string) {
     [state?.config?.soundEnabled, state?.config?.soundVolume, playManaSound, playRankUpSound]
   );
 
-  // Cross-tab / Cross-window broadcast listener (OBS + AdminDeck on Vercel without page refresh)
+  // Cloud Sync Publisher (Cross-PC, Cross-Browser, OBS CEF sync via ntfy.sh)
+  const broadcastCloudSync = useCallback(async (data: any) => {
+    const room = getSyncRoom();
+    try {
+      await fetch(`https://ntfy.sh/${room}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Title': 'Whatnot Mana Leaderboard'
+        },
+        body: JSON.stringify({
+          ...data,
+          senderId: clientIdRef.current,
+          timestamp: Date.now()
+        })
+      });
+    } catch (err) {
+      console.warn('[CloudSync] Broadcast error:', err);
+    }
+  }, []);
+
+  // 1. Cloud Sync SSE Listener (Works anywhere, connecting Chrome & OBS across all PCs)
+  useEffect(() => {
+    const room = getSyncRoom();
+    const cloudUrl = `https://ntfy.sh/${room}/sse`;
+    let sse: EventSource | null = null;
+
+    try {
+      sse = new EventSource(cloudUrl);
+      cloudSseRef.current = sse;
+
+      sse.onopen = () => {
+        console.log('⚡ [CloudSync] Connected to real-time room:', room);
+        setStatus('connected');
+      };
+
+      sse.onmessage = (event) => {
+        try {
+          const parsed = JSON.parse(event.data);
+          if (parsed.event === 'message' && parsed.message) {
+            const data = JSON.parse(parsed.message);
+
+            // Ignore messages sent by this client instance
+            if (data.senderId === clientIdRef.current) {
+              return;
+            }
+
+            if (data.type === 'SYNC_STATE' && data.nextState) {
+              setState(data.nextState);
+              try {
+                localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(data.nextState));
+              } catch (e) {}
+
+              if (data.event) {
+                handleIncomingMessage({
+                  type: 'PURCHASE_ALERT',
+                  payload: data.event
+                });
+              }
+              if (data.rankUp) {
+                handleIncomingMessage({
+                  type: 'RANK_UP_ALERT',
+                  payload: data.rankUp
+                });
+              }
+            } else if (data.type === 'SYNC_PURCHASE' && data.purchase) {
+              // Direct purchase event received from Chrome extension
+              setState((curr) => {
+                const result = simulateClientPurchase(curr, data.purchase);
+                handleIncomingMessage({
+                  type: 'PURCHASE_ALERT',
+                  payload: result.event
+                });
+                if (result.isRankUp && result.rankUpPayload) {
+                  handleIncomingMessage({
+                    type: 'RANK_UP_ALERT',
+                    payload: result.rankUpPayload
+                  });
+                }
+                try {
+                  localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(result.nextState));
+                } catch (e) {}
+                return result.nextState;
+              });
+            }
+          }
+        } catch (err) {
+          // Keepalive or unformatted frame
+        }
+      };
+
+      sse.onerror = () => {
+        // EventSource auto-reconnects
+      };
+    } catch (e) {
+      console.warn('[CloudSync] Failed to initialize SSE:', e);
+    }
+
+    return () => {
+      if (sse) sse.close();
+      cloudSseRef.current = null;
+    };
+  }, [handleIncomingMessage]);
+
+  // 2. BroadcastChannel + Storage Event Listener (Local tabs/windows in same browser)
   useEffect(() => {
     let bc: BroadcastChannel | null = null;
     try {
@@ -157,9 +274,7 @@ export function useWebSocket(customUrl?: string) {
         if (!data) return;
 
         if (data.type === 'CROSS_TAB_PURCHASE') {
-          if (data.nextState) {
-            setState(data.nextState);
-          }
+          if (data.nextState) setState(data.nextState);
           if (data.event) {
             handleIncomingMessage({
               type: 'PURCHASE_ALERT',
@@ -173,23 +288,16 @@ export function useWebSocket(customUrl?: string) {
             });
           }
         } else if (data.type === 'CROSS_TAB_STATE') {
-          if (data.nextState) {
-            setState(data.nextState);
-          }
+          if (data.nextState) setState(data.nextState);
         }
       };
-    } catch (e) {
-      console.warn('[Realtime] BroadcastChannel unavailable, using storage fallback', e);
-    }
+    } catch (e) {}
 
-    // Storage event listener fallback (for separate browser contexts)
     const handleStorageEvent = (e: StorageEvent) => {
       if (e.key === 'whatnot_mana_cross_tab_event' && e.newValue) {
         try {
           const parsed = JSON.parse(e.newValue);
-          if (parsed.nextState) {
-            setState(parsed.nextState);
-          }
+          if (parsed.nextState) setState(parsed.nextState);
           if (parsed.event) {
             handleIncomingMessage({
               type: 'PURCHASE_ALERT',
@@ -220,14 +328,14 @@ export function useWebSocket(customUrl?: string) {
     };
   }, [handleIncomingMessage]);
 
-  // Connect WebSocket
+  // 3. Connect local or custom WebSocket server (if running)
   const connectWs = useCallback(() => {
+    const { wsUrl, hasDedicatedBackend } = getEndpoints();
+    if (!hasDedicatedBackend || !wsUrl) return;
+
     if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
       return;
     }
-
-    const { wsUrl } = getEndpoints();
-    setStatus('connecting');
 
     try {
       const ws = new WebSocket(wsUrl);
@@ -253,110 +361,32 @@ export function useWebSocket(customUrl?: string) {
 
       ws.onclose = () => {
         wsRef.current = null;
-        setStatus('disconnected');
         reconnectTimeoutRef.current = window.setTimeout(() => {
           connectWs();
-        }, 3000);
+        }, 4000);
       };
 
       ws.onerror = () => {
         ws.close();
       };
-    } catch (e) {
-      setStatus('disconnected');
-    }
+    } catch (e) {}
   }, [getEndpoints, handleIncomingMessage]);
-
-  // Connect Server-Sent Events (SSE) stream for infallible OBS CEF updates
-  const connectSSE = useCallback(() => {
-    if (sseRef.current) {
-      sseRef.current.close();
-    }
-
-    const { httpOrigin } = getEndpoints();
-    try {
-      const sse = new EventSource(`${httpOrigin}/api/events`);
-      sseRef.current = sse;
-
-      sse.onopen = () => {
-        setStatus('connected');
-      };
-
-      sse.onmessage = (event) => {
-        try {
-          const msg: WSMessage = JSON.parse(event.data);
-          handleIncomingMessage(msg);
-        } catch (err) {
-          console.error('[Realtime] Error parsing SSE event:', err);
-        }
-      };
-
-      sse.onerror = () => {
-        // EventSource automatically reconnects
-      };
-    } catch (e) {
-      // Ignored if offline
-    }
-  }, [getEndpoints, handleIncomingMessage]);
-
-  // Fetch state via REST endpoint
-  const fetchCurrentState = useCallback(() => {
-    const { httpOrigin } = getEndpoints();
-    fetch(`${httpOrigin}/api/state`)
-      .then((res) => {
-        if (!res.ok) throw new Error('HTTP error');
-        return res.json();
-      })
-      .then((data) => {
-        if (data) {
-          const rawState = data.state || data;
-          const leaderboard = data.leaderboard || rawState.leaderboard || [];
-          const merged: LeaderboardState = {
-            ...rawState,
-            leaderboard
-          };
-          setState(merged);
-          setStatus('connected');
-          try {
-            localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(merged));
-          } catch (e) {}
-        }
-      })
-      .catch(() => {
-        // Keep current state or demo state
-      });
-  }, [getEndpoints]);
 
   useEffect(() => {
-    fetchCurrentState();
     connectWs();
-    connectSSE();
-
-    const pollInterval = window.setInterval(() => {
-      fetchCurrentState();
-    }, 3000);
-
     return () => {
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
       }
-      if (sseRef.current) {
-        sseRef.current.close();
-        sseRef.current = null;
-      }
-      window.clearInterval(pollInterval);
     };
-  }, [connectWs, connectSSE, fetchCurrentState]);
+  }, [connectWs]);
 
+  // Send message or mutation (Optimistic local update + Instant Cloud/Broadcast Sync)
   const sendMessage = useCallback(
     (type: WSMessageType, payload: any = {}) => {
-      const { httpOrigin } = getEndpoints();
-
-      // If WebSocket is open, send to backend
+      // 1. Send via local WebSocket if available
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.send(
           JSON.stringify({
@@ -365,179 +395,144 @@ export function useWebSocket(customUrl?: string) {
             timestamp: Date.now()
           })
         );
-        return;
       }
 
-      // Try REST fallback
+      // 2. Perform instant optimistic local update & sync across tabs/OBS
       if (type === 'NEW_PURCHASE') {
-        fetch(`${httpOrigin}/api/purchase`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        })
-          .then((res) => {
-            if (!res.ok) throw new Error('REST failed');
-          })
-          .catch(() => {
-            // Standalone Browser Simulation (e.g. running on Vercel without a local server)
-            console.log('[Realtime] Server offline: Executing purchase and broadcasting cross-tab.');
-            setState((curr) => {
-              const result = simulateClientPurchase(curr, payload);
+        setState((curr) => {
+          const result = simulateClientPurchase(curr, payload);
 
-              // 1. Trigger local alerts & audio
-              handleIncomingMessage({
-                type: 'PURCHASE_ALERT',
-                payload: result.event
-              });
-              if (result.isRankUp && result.rankUpPayload) {
-                handleIncomingMessage({
-                  type: 'RANK_UP_ALERT',
-                  payload: result.rankUpPayload
-                });
-              }
-
-              // 2. Broadcast via BroadcastChannel so any open OBS window or tab updates with 0ms delay!
-              try {
-                const bc = new BroadcastChannel(BROADCAST_BUS_NAME);
-                bc.postMessage({
-                  type: 'CROSS_TAB_PURCHASE',
-                  event: result.event,
-                  rankUp: result.rankUpPayload,
-                  nextState: result.nextState
-                });
-                bc.close();
-              } catch (e) {}
-
-              // 3. Save to localStorage + trigger storage event for cross-browser sync
-              try {
-                localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(result.nextState));
-                localStorage.setItem(
-                  'whatnot_mana_cross_tab_event',
-                  JSON.stringify({
-                    event: result.event,
-                    rankUp: result.rankUpPayload,
-                    nextState: result.nextState,
-                    timestamp: Date.now()
-                  })
-                );
-              } catch (e) {}
-
-              return result.nextState;
-            });
+          // Local audio & visual trigger
+          handleIncomingMessage({
+            type: 'PURCHASE_ALERT',
+            payload: result.event
           });
-      } else if (type === 'RESET_SESSION') {
-        fetch(`${httpOrigin}/api/reset`, { method: 'POST' }).catch(() => {
-          const fresh = getInitialDemoState();
-          setState(fresh);
-
-          try {
-            const bc = new BroadcastChannel(BROADCAST_BUS_NAME);
-            bc.postMessage({
-              type: 'CROSS_TAB_STATE',
-              nextState: fresh
+          if (result.isRankUp && result.rankUpPayload) {
+            handleIncomingMessage({
+              type: 'RANK_UP_ALERT',
+              payload: result.rankUpPayload
             });
-            bc.close();
-          } catch (e) {}
+          }
 
+          // Save to local storage
           try {
-            localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(fresh));
+            localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(result.nextState));
             localStorage.setItem(
               'whatnot_mana_cross_tab_event',
               JSON.stringify({
-                nextState: fresh,
+                event: result.event,
+                rankUp: result.rankUpPayload,
+                nextState: result.nextState,
                 timestamp: Date.now()
               })
             );
           } catch (e) {}
-        });
-      } else if (type === 'MANUAL_ADJUST') {
-        fetch(`${httpOrigin}/api/adjust`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        }).catch(() => {
-          setState((curr) => {
-            const { username, purchases } = payload;
-            const updated = curr.leaderboard.map((b) =>
-              b.username.toLowerCase() === username.toLowerCase()
-                ? { ...b, purchaseCount: purchases }
-                : b
-            );
-            const next = { ...curr, leaderboard: updated };
 
-            try {
-              const bc = new BroadcastChannel(BROADCAST_BUS_NAME);
-              bc.postMessage({
-                type: 'CROSS_TAB_STATE',
-                nextState: next
-              });
-              bc.close();
-            } catch (e) {}
+          // Local BroadcastChannel
+          try {
+            const bc = new BroadcastChannel(BROADCAST_BUS_NAME);
+            bc.postMessage({
+              type: 'CROSS_TAB_PURCHASE',
+              event: result.event,
+              rankUp: result.rankUpPayload,
+              nextState: result.nextState
+            });
+            bc.close();
+          } catch (e) {}
 
-            try {
-              localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(next));
-            } catch (e) {}
-
-            return next;
+          // Cloud Sync across PCs & OBS CEF
+          broadcastCloudSync({
+            type: 'SYNC_STATE',
+            event: result.event,
+            rankUp: result.rankUpPayload,
+            nextState: result.nextState
           });
-        });
-      } else if (type === 'DELETE_USER') {
-        fetch(`${httpOrigin}/api/buyer/${payload.username}`, { method: 'DELETE' }).catch(() => {
-          setState((curr) => {
-            const updated = curr.leaderboard.filter(
-              (b) => b.username.toLowerCase() !== payload.username.toLowerCase()
-            );
-            const next = { ...curr, leaderboard: updated };
 
-            try {
-              const bc = new BroadcastChannel(BROADCAST_BUS_NAME);
-              bc.postMessage({
-                type: 'CROSS_TAB_STATE',
-                nextState: next
-              });
-              bc.close();
-            } catch (e) {}
-
-            try {
-              localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(next));
-            } catch (e) {}
-
-            return next;
-          });
+          return result.nextState;
         });
       } else if (type === 'UPDATE_CONFIG') {
-        fetch(`${httpOrigin}/api/config`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        })
-          .then((res) => {
-            if (!res.ok) throw new Error('Config update failed');
-          })
-          .catch(() => {
-            setState((curr) => {
-              const updatedConfig = { ...curr.config, ...payload };
-              const next = { ...curr, config: updatedConfig };
+        setState((curr) => {
+          const updatedConfig = { ...curr.config, ...payload };
+          const nextState = { ...curr, config: updatedConfig };
 
-              try {
-                const bc = new BroadcastChannel(BROADCAST_BUS_NAME);
-                bc.postMessage({
-                  type: 'CROSS_TAB_STATE',
-                  nextState: next
-                });
-                bc.close();
-              } catch (e) {}
+          try {
+            localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(nextState));
+          } catch (e) {}
 
-              try {
-                localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(next));
-              } catch (e) {}
+          try {
+            const bc = new BroadcastChannel(BROADCAST_BUS_NAME);
+            bc.postMessage({ type: 'CROSS_TAB_STATE', nextState });
+            bc.close();
+          } catch (e) {}
 
-              return next;
-            });
-          });
+          broadcastCloudSync({ type: 'SYNC_STATE', nextState });
+          return nextState;
+        });
+      } else if (type === 'RESET_SESSION') {
+        const fresh = getInitialDemoState();
+        setState(fresh);
+
+        try {
+          localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(fresh));
+          localStorage.setItem(
+            'whatnot_mana_cross_tab_event',
+            JSON.stringify({ nextState: fresh, timestamp: Date.now() })
+          );
+        } catch (e) {}
+
+        try {
+          const bc = new BroadcastChannel(BROADCAST_BUS_NAME);
+          bc.postMessage({ type: 'CROSS_TAB_STATE', nextState: fresh });
+          bc.close();
+        } catch (e) {}
+
+        broadcastCloudSync({ type: 'SYNC_STATE', nextState: fresh });
+      } else if (type === 'MANUAL_ADJUST') {
+        setState((curr) => {
+          const { username, purchases } = payload;
+          const updated = curr.leaderboard.map((b) =>
+            b.username.toLowerCase() === username.toLowerCase()
+              ? { ...b, purchaseCount: purchases }
+              : b
+          );
+          const nextState = { ...curr, leaderboard: updated };
+
+          try {
+            localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(nextState));
+          } catch (e) {}
+
+          try {
+            const bc = new BroadcastChannel(BROADCAST_BUS_NAME);
+            bc.postMessage({ type: 'CROSS_TAB_STATE', nextState });
+            bc.close();
+          } catch (e) {}
+
+          broadcastCloudSync({ type: 'SYNC_STATE', nextState });
+          return nextState;
+        });
+      } else if (type === 'DELETE_USER') {
+        setState((curr) => {
+          const updated = curr.leaderboard.filter(
+            (b) => b.username.toLowerCase() !== payload.username.toLowerCase()
+          );
+          const nextState = { ...curr, leaderboard: updated };
+
+          try {
+            localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(nextState));
+          } catch (e) {}
+
+          try {
+            const bc = new BroadcastChannel(BROADCAST_BUS_NAME);
+            bc.postMessage({ type: 'CROSS_TAB_STATE', nextState });
+            bc.close();
+          } catch (e) {}
+
+          broadcastCloudSync({ type: 'SYNC_STATE', nextState });
+          return nextState;
+        });
       }
     },
-    [getEndpoints, handleIncomingMessage]
+    [broadcastCloudSync, handleIncomingMessage]
   );
 
   const clearAlerts = useCallback(() => {

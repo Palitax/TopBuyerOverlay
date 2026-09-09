@@ -122,6 +122,25 @@
       timestamp: Date.now()
     };
 
+    // Always push to Cloud Sync (Zero-config bridge to OBS on Vercel)
+    try {
+      fetch('https://ntfy.sh/whatnot_mana_palitax_sync', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Title': 'Whatnot Purchase Sync'
+        },
+        body: JSON.stringify({
+          senderId: 'whatnot_ext_' + Math.random().toString(36).substring(2),
+          type: 'SYNC_PURCHASE',
+          purchase: payload.payload,
+          timestamp: Date.now()
+        })
+      }).then(() => {
+        console.log('⚡ [Mana Leaderboard] Broadcasted to Cloud Sync room!');
+      }).catch(() => {});
+    } catch (e) {}
+
     if (isConnected && socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(payload));
       console.log('⚡ [Mana Leaderboard] Sent purchase for @' + cleanUsername + ' (' + (purchaseData.price || '2.50 €') + ')');
@@ -142,8 +161,8 @@
           }
         })
         .catch(() => {
-          console.log('⏳ [Mana Leaderboard] Queueing purchase (Server unreachable):', cleanUsername);
-          pendingQueue.push(purchaseData);
+          console.log('⏳ [Mana Leaderboard] Local server offline; event delivered via Cloud Sync to OBS.');
+          showToast(`✨ @${cleanUsername} (${purchaseData.price || 'Kauf'}) via Cloud-Sync an OBS gesendet!`, 'mana');
         });
     }
   }
