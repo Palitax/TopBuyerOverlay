@@ -1,6 +1,6 @@
 /**
  * Whatnot Mana Leaderboard Tracker - Content Script
- * Monitors Whatnot Stream DOM for new purchase events and relays them to ws://localhost:8080
+ * Monitors Whatnot Stream DOM for new purchase events and relays them to WebSocket & REST
  */
 
 (function () {
@@ -8,21 +8,40 @@
 
   console.log('🔮 [Mana Leaderboard] Whatnot Content Script active!');
 
-  const RELAY_WS_URL = 'ws://localhost:8080';
+  let RELAY_WS_URL = 'ws://localhost:8080';
+  let RELAY_HTTP_URL = 'http://localhost:8080';
   let socket = null;
   let isConnected = false;
   const processedEvents = new Set();
   const pendingQueue = [];
 
-  // Connect to local WebSocket Relay Server
+  // Read configured relay URL from extension storage if available
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.get(['relayUrl'], (result) => {
+      if (result && result.relayUrl) {
+        RELAY_WS_URL = result.relayUrl.replace(/^http/, 'ws');
+        RELAY_HTTP_URL = result.relayUrl.replace(/^ws/, 'http');
+        console.log('🔮 [Mana Leaderboard] Configured Relay URL:', RELAY_WS_URL);
+      }
+      connectRelay();
+    });
+  } else {
+    connectRelay();
+  }
+
+  // Connect to local or remote WebSocket Relay Server
   function connectRelay() {
+    if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+
     try {
       socket = new WebSocket(RELAY_WS_URL);
 
       socket.onopen = () => {
         console.log('✅ [Mana Leaderboard] Connected to Relay Server at', RELAY_WS_URL);
         isConnected = true;
-        showToast('🔮 Mana Overlay verbunden!', 'success');
+        showToast('🔮 Mana Leaderboard verbunden!', 'success');
 
         // Flush any queued events
         while (pendingQueue.length > 0) {
@@ -57,20 +76,37 @@
     }
   }
 
-  connectRelay();
+  // Multi-currency price parser for Euro, Dollar, and Pound (e.g. 35,00 €, $45.00, 2.50€, 50 EUR)
+  function extractPriceFromText(text) {
+    if (!text || typeof text !== 'string') return undefined;
 
-  // Send purchase event to server
+    // Matches: $35.00, 35.00 €, 35,00€, €35, 35 EUR, 35 USD, £25
+    const match = text.match(/(?:[$€£]\s*([0-9]+(?:[.,][0-9]{1,2})?)|([0-9]+(?:[.,][0-9]{1,2})?)\s*(?:[$€£]|EUR|USD|GBP))/i);
+    if (match) {
+      const numStr = match[1] || match[2];
+      const normalized = numStr.replace(',', '.');
+      const parsed = parseFloat(normalized);
+      if (!isNaN(parsed) && parsed > 0) {
+        return `${parsed.toFixed(2)} €`;
+      }
+    }
+    return undefined;
+  }
+
+  // Send purchase event to server (via WebSocket with REST fallback)
   function sendPurchaseEvent(purchaseData) {
     if (!purchaseData || !purchaseData.username) return;
 
+    const cleanUsername = purchaseData.username.trim().replace(/^@/, '');
+    if (!cleanUsername || cleanUsername.length < 2) return;
+
     // Deduplication Key (within 30 seconds)
-    const dedupKey = `${purchaseData.username}-${purchaseData.itemTitle || ''}-${purchaseData.price || ''}-${Math.floor(Date.now() / 15000)}`;
+    const dedupKey = `${cleanUsername.toLowerCase()}-${purchaseData.itemTitle || ''}-${purchaseData.price || ''}-${Math.floor(Date.now() / 20000)}`;
     if (processedEvents.has(dedupKey)) {
       return;
     }
     processedEvents.add(dedupKey);
 
-    // Clean old entries after 1 minute
     setTimeout(() => {
       processedEvents.delete(dedupKey);
     }, 60000);
@@ -78,9 +114,9 @@
     const payload = {
       type: 'NEW_PURCHASE',
       payload: {
-        username: purchaseData.username,
+        username: cleanUsername,
         itemTitle: purchaseData.itemTitle || 'Whatnot Stream Item',
-        price: purchaseData.price,
+        price: purchaseData.price || '2.50 €',
         quantity: purchaseData.quantity || 1
       },
       timestamp: Date.now()
@@ -88,42 +124,100 @@
 
     if (isConnected && socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(payload));
-      console.log('⚡ [Mana Leaderboard] Sent purchase for @' + purchaseData.username);
-      showToast(`✨ @${purchaseData.username} Kauf an Leaderboard übertragen!`, 'mana');
+      console.log('⚡ [Mana Leaderboard] Sent purchase for @' + cleanUsername + ' (' + (purchaseData.price || '2.50 €') + ')');
+      showToast(`✨ @${cleanUsername} (${purchaseData.price || 'Kauf'}) an Overlay übertragen!`, 'mana');
     } else {
-      console.log('⏳ [Mana Leaderboard] Queueing purchase (Relay disconnected):', purchaseData.username);
-      pendingQueue.push(purchaseData);
+      // Direct REST fallback if WebSocket is temporarily reconnecting
+      fetch(`${RELAY_HTTP_URL}/api/purchase`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload.payload)
+      })
+        .then((res) => {
+          if (res.ok) {
+            console.log('⚡ [Mana Leaderboard] Sent purchase via REST for @' + cleanUsername);
+            showToast(`✨ @${cleanUsername} (${purchaseData.price || 'Kauf'}) übertragen!`, 'mana');
+          } else {
+            throw new Error('REST fallback response not ok');
+          }
+        })
+        .catch(() => {
+          console.log('⏳ [Mana Leaderboard] Queueing purchase (Server unreachable):', cleanUsername);
+          pendingQueue.push(purchaseData);
+        });
     }
   }
 
-  // Regex Patterns for parsing purchase notifications in chat/DOM
+  // Multi-lingual Regex Patterns for Whatnot (English & German)
   const PURCHASE_PATTERNS = [
-    /@?([a-zA-Z0-9_.-]+)\s+(?:bought|purchased|won|ordered|kaufte|ersteigerte)\s+(.+?)(?:\s+for\s+(\$[0-9,.]+))?$/i,
-    /Sold to\s+@?([a-zA-Z0-9_.-]+)(?:\s+for\s+(\$[0-9,.]+))?/i,
-    /Verkauft an\s+@?([a-zA-Z0-9_.-]+)/i,
-    /@?([a-zA-Z0-9_.-]+)\s+just bought/i,
-    /@?([a-zA-Z0-9_.-]+)\s+placed an order/i
+    // @User bought [Item] for [Price] / @User kaufte [Item] für [Price]
+    /@?([a-zA-Z0-9_.-]+)\s+(?:bought|purchased|won|ordered|kaufte|ersteigerte|holte sich|hat)\s+(.+?)(?:\s+(?:for|für|um)\s+([$€£0-9,.\s]+(?:EUR|USD|GBP)?))?$/i,
+
+    // Sold to @User for [Price] / Verkauft an @User für [Price]
+    /(?:Sold to|Verkauft an)\s+@?([a-zA-Z0-9_.-]+)(?:\s+(?:for|für)\s+([$€£0-9,.\s]+(?:EUR|USD|GBP)?))?/i,
+
+    // Winner: @User ($XX.XX) / Gewinner: @User (XX,XX €)
+    /(?:Winner|Gewinner|Höchstbietender):\s+@?([a-zA-Z0-9_.-]+)(?:\s*\(([$€£0-9,.\s]+)\))?/i,
+
+    // [Item] sold to @User for [Price]
+    /(.+?)\s+(?:sold to|verkauft an)\s+@?([a-zA-Z0-9_.-]+)(?:\s+(?:for|für)\s+([$€£0-9,.\s]+))?/i,
+
+    // Order by @User / Bestellung von @User
+    /(?:Order|Bestellung)\s+(?:by|von)\s+@?([a-zA-Z0-9_.-]+)/i,
+
+    // @User just bought! / @User hat gerade gekauft!
+    /@?([a-zA-Z0-9_.-]+)\s+(?:just bought|hat gerade gekauft|placed an order)/i
   ];
 
   function extractPurchaseFromText(text) {
     if (!text || typeof text !== 'string') return null;
-    const clean = text.trim();
+    const clean = text.trim().replace(/\s+/g, ' ');
 
     for (const pattern of PURCHASE_PATTERNS) {
       const match = clean.match(pattern);
       if (match) {
-        const username = match[1];
-        const itemTitle = match[2] && !match[2].startsWith('$') ? match[2] : 'Whatnot Stream Kauf';
-        const price = match[3] || (match[2]?.startsWith('$') ? match[2] : undefined);
+        // Find which group is the username (contains letters/numbers, no currency)
+        let username = match[1];
+        let itemTitle = match[2];
+        let rawPrice = match[3];
 
+        if (pattern.source.includes('sold to') && !pattern.source.startsWith('(?:Sold to')) {
+          itemTitle = match[1];
+          username = match[2];
+          rawPrice = match[3];
+        }
+
+        const price = extractPriceFromText(rawPrice) || extractPriceFromText(clean);
+
+        if (username) {
+          return {
+            username: username.replace(/^@/, '').trim(),
+            itemTitle: itemTitle && !itemTitle.includes('€') && !itemTitle.includes('$') ? itemTitle.trim() : 'Whatnot Stream Kauf',
+            price: price || '2.50 €',
+            quantity: 1
+          };
+        }
+      }
+    }
+
+    // Fallback: Check if message contains "bought" or "kaufte" or "sold" AND has a username mention
+    if (
+      (clean.includes('bought') || clean.includes('purchased') || clean.includes('kaufte') || clean.includes('Sold') || clean.includes('Verkauft')) &&
+      clean.includes('@')
+    ) {
+      const userMatch = clean.match(/@([a-zA-Z0-9_.-]+)/);
+      if (userMatch) {
+        const username = userMatch[1];
+        const price = extractPriceFromText(clean) || '2.50 €';
         return {
-          username: username.replace(/^@/, ''),
-          itemTitle: itemTitle?.trim(),
-          price: price?.trim(),
+          username,
+          itemTitle: 'Whatnot Stream Kauf',
+          price,
           quantity: 1
         };
       }
     }
+
     return null;
   }
 
@@ -136,16 +230,21 @@
     // Check specific Whatnot class names / test IDs or attributes
     const testId = el.getAttribute('data-testid') || '';
     const ariaLabel = el.getAttribute('aria-label') || '';
-    const className = el.className || '';
+    const className = typeof el.className === 'string' ? el.className : '';
 
-    // Check if it's a purchase celebration or system message
+    // Check if it's a purchase celebration, sale toast, or system order message
     const isPurchaseElement =
       testId.includes('sale') ||
       testId.includes('order') ||
       testId.includes('purchase') ||
-      (typeof className === 'string' && (className.includes('sale') || className.includes('Order') || className.includes('Sold')));
+      testId.includes('buyer') ||
+      className.includes('sale') ||
+      className.includes('Order') ||
+      className.includes('Sold') ||
+      className.includes('purchase');
 
     const fullText = (el.innerText || el.textContent || '').trim();
+    if (!fullText) return;
 
     // 1. Direct text pattern matching
     const parsed = extractPurchaseFromText(fullText) || (ariaLabel ? extractPurchaseFromText(ariaLabel) : null);
@@ -154,16 +253,28 @@
       return;
     }
 
-    // 2. Structured Whatnot Card/Toast inspection
-    if (isPurchaseElement || fullText.includes('bought') || fullText.includes('Sold') || fullText.includes('Kauf')) {
+    // 2. Structured Whatnot Card / Toast inspection
+    if (
+      isPurchaseElement ||
+      fullText.includes('bought') ||
+      fullText.includes('purchased') ||
+      fullText.includes('Sold to') ||
+      fullText.includes('Verkauft an') ||
+      fullText.includes('kaufte')
+    ) {
       // Look for username link or handle
       const userEl = el.querySelector('a[href*="/user/"], [data-testid*="username"], [class*="username"], [class*="buyer"]');
       if (userEl) {
         const username = (userEl.textContent || '').replace(/^@/, '').trim();
+        const price = extractPriceFromText(fullText) || '2.50 €';
+        const itemEl = el.querySelector('[data-testid*="product"], [class*="product"], [class*="title"], [class*="item"]');
+        const itemTitle = itemEl ? (itemEl.textContent || '').trim() : 'Live Stream Kauf';
+
         if (username) {
           sendPurchaseEvent({
             username,
-            itemTitle: 'Live Stream Kauf',
+            itemTitle,
+            price,
             quantity: 1
           });
         }
@@ -178,9 +289,9 @@
         mutation.addedNodes.forEach((node) => {
           inspectNode(node);
           if (node.querySelectorAll) {
-            // Also check inner children
+            // Also check inner children for fast batch renders
             const potentialTargets = node.querySelectorAll(
-              '[data-testid*="order"], [data-testid*="sale"], [class*="message"], [class*="Message"], [class*="notification"]'
+              '[data-testid*="order"], [data-testid*="sale"], [class*="message"], [class*="Message"], [class*="notification"], [class*="toast"]'
             );
             potentialTargets.forEach((child) => inspectNode(child));
           }
@@ -189,7 +300,6 @@
     }
   });
 
-  // Start observing once DOM is ready
   function startObserver() {
     observer.observe(document.body, {
       childList: true,
@@ -204,7 +314,7 @@
     startObserver();
   }
 
-  // Floating in-page notification Toast
+  // Floating in-page notification Toast on Whatnot
   function showToast(message, type = 'mana') {
     let container = document.getElementById('mana-overlay-toast-container');
     if (!container) {
@@ -226,14 +336,14 @@
 
     const toast = document.createElement('div');
     Object.assign(toast.style, {
-      background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 27, 75, 0.95))',
+      background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.98), rgba(30, 27, 75, 0.98))',
       color: '#fff',
-      border: '1px solid rgba(56, 189, 248, 0.5)',
-      boxShadow: '0 8px 24px rgba(0, 0, 0, 0.5), 0 0 12px rgba(168, 85, 247, 0.4)',
+      border: '1.5px solid rgba(56, 189, 248, 0.7)',
+      boxShadow: '0 8px 24px rgba(0, 0, 0, 0.8), 0 0 14px rgba(168, 85, 247, 0.5)',
       borderRadius: '12px',
       padding: '10px 16px',
       fontSize: '13px',
-      fontWeight: '600',
+      fontWeight: '700',
       display: 'flex',
       alignItems: 'center',
       gap: '8px',
@@ -266,7 +376,7 @@
         sendPurchaseEvent({
           username: request.username || 'TestBuyer_' + Math.floor(Math.random() * 100),
           itemTitle: 'Whatnot Test Item',
-          price: '$20.00',
+          price: '35.00 €',
           quantity: 1
         });
         sendResponse({ success: true });

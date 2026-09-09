@@ -319,57 +319,53 @@ html, body, #root {
   animation: flare-head-pulse 1.6s infinite ease-in-out;
 }
 
-/* Glassmorphism Mobile Streaming Panels for Podium (Semi-transparent & Compact) */
+/* Solid Luxury Streaming Panels for Podium (100% Opaque, Crisp on Live Video) */
 /* Platz 1: Kosmisches Gold */
 .fantasy-panel-gold {
   background: linear-gradient(
     135deg,
-    rgba(38, 24, 7, 0.82) 0%,
-    rgba(15, 10, 3, 0.86) 100%
+    #231505 0%,
+    #0f0902 100%
   );
-  backdrop-filter: blur(8px);
-  border: 1px solid rgba(251, 191, 36, 0.65);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5),
-              inset 0 0 12px rgba(251, 191, 36, 0.12);
+  border: 1.5px solid rgba(251, 191, 36, 0.9);
+  box-shadow: 0 5px 20px rgba(0, 0, 0, 0.95),
+              inset 0 0 14px rgba(251, 191, 36, 0.18);
 }
 
 /* Platz 2: Edles Silber */
 .fantasy-panel-silver {
   background: linear-gradient(
     135deg,
-    rgba(25, 33, 46, 0.82) 0%,
-    rgba(10, 15, 26, 0.86) 100%
+    #141c28 0%,
+    #0a0e16 100%
   );
-  backdrop-filter: blur(8px);
-  border: 1px solid rgba(203, 213, 225, 0.6);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5),
-              inset 0 0 10px rgba(226, 232, 240, 0.1);
+  border: 1.5px solid rgba(203, 213, 225, 0.85);
+  box-shadow: 0 5px 20px rgba(0, 0, 0, 0.95),
+              inset 0 0 12px rgba(226, 232, 240, 0.14);
 }
 
 /* Platz 3: Warmes Bronze */
 .fantasy-panel-bronze {
   background: linear-gradient(
     135deg,
-    rgba(40, 20, 9, 0.82) 0%,
-    rgba(16, 8, 3, 0.86) 100%
+    #251205 0%,
+    #120802 100%
   );
-  backdrop-filter: blur(8px);
-  border: 1px solid rgba(249, 115, 22, 0.55);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5),
-              inset 0 0 10px rgba(217, 119, 6, 0.12);
+  border: 1.5px solid rgba(249, 115, 22, 0.85);
+  box-shadow: 0 5px 20px rgba(0, 0, 0, 0.95),
+              inset 0 0 12px rgba(217, 119, 6, 0.16);
 }
 
-/* Main Container Panel */
+/* Standard Panel / Platz 4+ */
 .fantasy-panel {
   background: linear-gradient(
     135deg,
-    rgba(15, 23, 42, 0.88) 0%,
-    rgba(10, 15, 30, 0.94) 100%
+    #0d1422 0%,
+    #060a12 100%
   );
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(56, 189, 248, 0.25);
-  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.45),
-              inset 0 0 16px 0 rgba(56, 189, 248, 0.1);
+  border: 1.5px solid rgba(56, 189, 248, 0.4);
+  box-shadow: 0 5px 20px rgba(0, 0, 0, 0.95),
+              inset 0 0 12px rgba(56, 189, 248, 0.1);
 }
 
 /* Arcane Text Glows */

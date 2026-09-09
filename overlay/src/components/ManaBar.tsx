@@ -18,15 +18,15 @@ export const ManaBar: React.FC<ManaBarProps> = ({
   const clampedProgress = Math.min(100, Math.max(3, progressPercent));
 
   return (
-    <div className="relative w-full h-[13px]">
-      {/* Tight, Thin Blazing Fire Rim: Flush with the 13px bar chassis */}
-      {hasStreak && <BurningFireBorder borderRadius={3.5} />}
+    <div className="relative w-full h-[18px]">
+      {/* Tight, Thin Blazing Fire Rim: Flush with the 18px bar chassis */}
+      {hasStreak && <BurningFireBorder borderRadius={4.5} />}
 
-      {/* Compact Mana Bar Chassis */}
+      {/* Stylized Mana Bar Chassis */}
       <div
-        className={`relative w-full h-full rounded-[3.5px] overflow-hidden transition-all duration-300 ${
+        className={`relative w-full h-full rounded-[4.5px] overflow-hidden transition-all duration-300 ${
           hasStreak
-            ? 'bg-[#050711] border border-amber-500/70 shadow-[0_0_6px_rgba(245,158,11,0.2)]'
+            ? 'bg-[#050711] border border-amber-500/80 shadow-[0_0_8px_rgba(245,158,11,0.25)]'
             : 'compact-manabar-frame'
         }`}
       >

@@ -382,7 +382,7 @@ export const AdminDeck: React.FC<AdminDeckProps> = ({ state, status, onSendMessa
               <div>
                 <label className="block text-xs text-slate-400 mb-1">Max angezeigte Käufer im Overlay</label>
                 <select
-                  value={config?.maxDisplayCount || 5}
+                  value={config?.maxDisplayCount ?? 3}
                   onChange={(e) => handleUpdateConfig('maxDisplayCount', parseInt(e.target.value, 10))}
                   className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500"
                 >

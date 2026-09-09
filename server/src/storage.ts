@@ -55,7 +55,7 @@ export const DEFAULT_RANKS: RankTier[] = [
 export const DEFAULT_CONFIG: OverlayConfig = {
   overlayTitle: '✨ Fantasy Mana Leaderboard ✨',
   streamerName: 'Whatnot Streamer',
-  maxDisplayCount: 5,
+  maxDisplayCount: 3,
   soundEnabled: true,
   soundVolume: 0.7,
   manaMultiplier: 100, // 1 purchase = 100 mana

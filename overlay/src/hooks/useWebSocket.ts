@@ -505,6 +505,36 @@ export function useWebSocket(customUrl?: string) {
             return next;
           });
         });
+      } else if (type === 'UPDATE_CONFIG') {
+        fetch(`${httpOrigin}/api/config`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        })
+          .then((res) => {
+            if (!res.ok) throw new Error('Config update failed');
+          })
+          .catch(() => {
+            setState((curr) => {
+              const updatedConfig = { ...curr.config, ...payload };
+              const next = { ...curr, config: updatedConfig };
+
+              try {
+                const bc = new BroadcastChannel(BROADCAST_BUS_NAME);
+                bc.postMessage({
+                  type: 'CROSS_TAB_STATE',
+                  nextState: next
+                });
+                bc.close();
+              } catch (e) {}
+
+              try {
+                localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(next));
+              } catch (e) {}
+
+              return next;
+            });
+          });
       }
     },
     [getEndpoints, handleIncomingMessage]
