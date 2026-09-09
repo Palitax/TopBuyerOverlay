@@ -187,6 +187,33 @@ export function useWebSocket(customUrl?: string) {
     const cloudUrl = `https://ntfy.sh/${room}/sse`;
     let sse: EventSource | null = null;
 
+    // Immediately restore latest synced state from Cloud on load / refresh
+    fetch(`https://ntfy.sh/${room}/json?poll=1`)
+      .then((res) => res.text())
+      .then((text) => {
+        if (!text) return;
+        const lines = text.trim().split('\n');
+        for (let i = lines.length - 1; i >= 0; i--) {
+          try {
+            const item = JSON.parse(lines[i]);
+            if (item.message) {
+              const parsed = JSON.parse(item.message);
+              if (parsed.type === 'SYNC_STATE' && parsed.nextState) {
+                console.log('⚡ [CloudSync] Restored latest state from cloud:', parsed.nextState);
+                setState(parsed.nextState);
+                try {
+                  localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(parsed.nextState));
+                } catch (e) {}
+                break;
+              }
+            }
+          } catch (e) {}
+        }
+      })
+      .catch((err) => {
+        console.warn('[CloudSync] Poll error:', err);
+      });
+
     try {
       sse = new EventSource(cloudUrl);
       cloudSseRef.current = sse;
