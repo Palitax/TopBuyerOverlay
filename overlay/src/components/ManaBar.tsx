@@ -50,8 +50,11 @@ export const ManaBar: React.FC<ManaBarProps> = ({
             }
           }}
         >
-          {/* Diagonal Stylized Anime Water Highlights */}
+          {/* Diagonal Stylized Anime Water Highlights (Flowing left to right) */}
           <div className="absolute inset-0 anime-water-sheen pointer-events-none" />
+
+          {/* Continuous Soft Mana Energy Flow (Left to right surge) */}
+          <div className="absolute inset-y-0 w-2/3 bg-gradient-to-r from-transparent via-cyan-100/35 to-transparent pointer-events-none animate-mana-beam-flow" />
 
           {/* Floating Water Droplets / Foam Bubbles (From Reference Image) */}
           <div className="absolute inset-0 pointer-events-none">

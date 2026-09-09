@@ -99,16 +99,49 @@ html, body, #root {
   animation: anime-water-flow 4.8s linear infinite;
 }
 
-/* Wavy liquid water highlight ribbon */
+/* Wavy liquid water highlight ribbon with continuous left-to-right flow */
+@keyframes water-waves-flow {
+  0% {
+    background-position: 0 0;
+  }
+  100% {
+    background-position: 45px 0;
+  }
+}
+
 .anime-water-sheen {
   background: repeating-linear-gradient(
     -45deg,
     transparent 0px,
     transparent 8px,
-    rgba(255, 255, 255, 0.1) 9px,
-    rgba(56, 217, 254, 0.16) 12px,
-    transparent 14px
+    rgba(255, 255, 255, 0.22) 9px,
+    rgba(56, 217, 254, 0.35) 12px,
+    transparent 15px
   );
+  background-size: 45px 45px;
+  animation: water-waves-flow 2.2s linear infinite;
+}
+
+/* Continuous sweeping magical mana glow pulse from left to right */
+@keyframes mana-beam-flow {
+  0% {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  20% {
+    opacity: 0.85;
+  }
+  80% {
+    opacity: 0.85;
+  }
+  100% {
+    transform: translateX(250%);
+    opacity: 0;
+  }
+}
+
+.animate-mana-beam-flow {
+  animation: mana-beam-flow 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 
 .animate-bubble-drift {

@@ -13,6 +13,8 @@ export interface RankUpEventPayload {
   purchaseEvent: PurchaseEvent;
 }
 
+const BROADCAST_BUS_NAME = 'top_buyer_mana_bus';
+
 export function useWebSocket(customUrl?: string) {
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
   const [state, setState] = useState<LeaderboardState>(() => {
@@ -144,6 +146,79 @@ export function useWebSocket(customUrl?: string) {
     },
     [state?.config?.soundEnabled, state?.config?.soundVolume, playManaSound, playRankUpSound]
   );
+
+  // Cross-tab / Cross-window broadcast listener (OBS + AdminDeck on Vercel without page refresh)
+  useEffect(() => {
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel(BROADCAST_BUS_NAME);
+      bc.onmessage = (event) => {
+        const data = event.data;
+        if (!data) return;
+
+        if (data.type === 'CROSS_TAB_PURCHASE') {
+          if (data.nextState) {
+            setState(data.nextState);
+          }
+          if (data.event) {
+            handleIncomingMessage({
+              type: 'PURCHASE_ALERT',
+              payload: data.event
+            });
+          }
+          if (data.rankUp) {
+            handleIncomingMessage({
+              type: 'RANK_UP_ALERT',
+              payload: data.rankUp
+            });
+          }
+        } else if (data.type === 'CROSS_TAB_STATE') {
+          if (data.nextState) {
+            setState(data.nextState);
+          }
+        }
+      };
+    } catch (e) {
+      console.warn('[Realtime] BroadcastChannel unavailable, using storage fallback', e);
+    }
+
+    // Storage event listener fallback (for separate browser contexts)
+    const handleStorageEvent = (e: StorageEvent) => {
+      if (e.key === 'whatnot_mana_cross_tab_event' && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (parsed.nextState) {
+            setState(parsed.nextState);
+          }
+          if (parsed.event) {
+            handleIncomingMessage({
+              type: 'PURCHASE_ALERT',
+              payload: parsed.event
+            });
+          }
+          if (parsed.rankUp) {
+            handleIncomingMessage({
+              type: 'RANK_UP_ALERT',
+              payload: parsed.rankUp
+            });
+          }
+        } catch (err) {}
+      }
+      if (e.key === 'whatnot_mana_demo_state' && e.newValue) {
+        try {
+          const parsedState = JSON.parse(e.newValue);
+          setState(parsedState);
+        } catch (err) {}
+      }
+    };
+
+    window.addEventListener('storage', handleStorageEvent);
+
+    return () => {
+      if (bc) bc.close();
+      window.removeEventListener('storage', handleStorageEvent);
+    };
+  }, [handleIncomingMessage]);
 
   // Connect WebSocket
   const connectWs = useCallback(() => {
@@ -305,9 +380,11 @@ export function useWebSocket(customUrl?: string) {
           })
           .catch(() => {
             // Standalone Browser Simulation (e.g. running on Vercel without a local server)
-            console.log('[Realtime] Server offline: Executing purchase in browser simulation mode.');
+            console.log('[Realtime] Server offline: Executing purchase and broadcasting cross-tab.');
             setState((curr) => {
               const result = simulateClientPurchase(curr, payload);
+
+              // 1. Trigger local alerts & audio
               handleIncomingMessage({
                 type: 'PURCHASE_ALERT',
                 payload: result.event
@@ -318,21 +395,61 @@ export function useWebSocket(customUrl?: string) {
                   payload: result.rankUpPayload
                 });
               }
+
+              // 2. Broadcast via BroadcastChannel so any open OBS window or tab updates with 0ms delay!
+              try {
+                const bc = new BroadcastChannel(BROADCAST_BUS_NAME);
+                bc.postMessage({
+                  type: 'CROSS_TAB_PURCHASE',
+                  event: result.event,
+                  rankUp: result.rankUpPayload,
+                  nextState: result.nextState
+                });
+                bc.close();
+              } catch (e) {}
+
+              // 3. Save to localStorage + trigger storage event for cross-browser sync
               try {
                 localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(result.nextState));
+                localStorage.setItem(
+                  'whatnot_mana_cross_tab_event',
+                  JSON.stringify({
+                    event: result.event,
+                    rankUp: result.rankUpPayload,
+                    nextState: result.nextState,
+                    timestamp: Date.now()
+                  })
+                );
               } catch (e) {}
+
               return result.nextState;
             });
           });
       } else if (type === 'RESET_SESSION') {
-        fetch(`${httpOrigin}/api/reset`, { method: 'POST' })
-          .catch(() => {
-            const fresh = getInitialDemoState();
-            setState(fresh);
-            try {
-              localStorage.removeItem('whatnot_mana_demo_state');
-            } catch (e) {}
-          });
+        fetch(`${httpOrigin}/api/reset`, { method: 'POST' }).catch(() => {
+          const fresh = getInitialDemoState();
+          setState(fresh);
+
+          try {
+            const bc = new BroadcastChannel(BROADCAST_BUS_NAME);
+            bc.postMessage({
+              type: 'CROSS_TAB_STATE',
+              nextState: fresh
+            });
+            bc.close();
+          } catch (e) {}
+
+          try {
+            localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(fresh));
+            localStorage.setItem(
+              'whatnot_mana_cross_tab_event',
+              JSON.stringify({
+                nextState: fresh,
+                timestamp: Date.now()
+              })
+            );
+          } catch (e) {}
+        });
       } else if (type === 'MANUAL_ADJUST') {
         fetch(`${httpOrigin}/api/adjust`, {
           method: 'POST',
@@ -347,9 +464,20 @@ export function useWebSocket(customUrl?: string) {
                 : b
             );
             const next = { ...curr, leaderboard: updated };
+
+            try {
+              const bc = new BroadcastChannel(BROADCAST_BUS_NAME);
+              bc.postMessage({
+                type: 'CROSS_TAB_STATE',
+                nextState: next
+              });
+              bc.close();
+            } catch (e) {}
+
             try {
               localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(next));
             } catch (e) {}
+
             return next;
           });
         });
@@ -360,9 +488,20 @@ export function useWebSocket(customUrl?: string) {
               (b) => b.username.toLowerCase() !== payload.username.toLowerCase()
             );
             const next = { ...curr, leaderboard: updated };
+
+            try {
+              const bc = new BroadcastChannel(BROADCAST_BUS_NAME);
+              bc.postMessage({
+                type: 'CROSS_TAB_STATE',
+                nextState: next
+              });
+              bc.close();
+            } catch (e) {}
+
             try {
               localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(next));
             } catch (e) {}
+
             return next;
           });
         });
