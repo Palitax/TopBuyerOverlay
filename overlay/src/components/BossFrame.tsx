@@ -28,8 +28,10 @@ export const BossFrame: React.FC<BossFrameProps> = ({ boss, latestHit }) => {
     }
   }, [isPhase2]);
 
-  // Real-time Canvas Black-Removal Chroma Keyer
-  // This turns near-black video pixels into 100% transparent alpha on transparent OBS canvas
+  // Real-time Canvas Chroma Keyer using Boundary-Seeded Flood Fill
+  // Removes pure studio black background while preserving dark obsidian steel armor and shadows 100% solid
+  const keyerBuffersRef = useRef<{ visited: Uint8Array; queue: Int32Array } | null>(null);
+
   useEffect(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -38,6 +40,18 @@ export const BossFrame: React.FC<BossFrameProps> = ({ boss, latestHit }) => {
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return;
 
+    const w = canvas.width;
+    const h = canvas.height;
+    const totalPixels = w * h;
+
+    if (!keyerBuffersRef.current || keyerBuffersRef.current.visited.length !== totalPixels) {
+      keyerBuffersRef.current = {
+        visited: new Uint8Array(totalPixels),
+        queue: new Int32Array(totalPixels),
+      };
+    }
+
+    const { visited, queue } = keyerBuffersRef.current;
     let animId: number;
     let isMounted = true;
 
@@ -45,34 +59,132 @@ export const BossFrame: React.FC<BossFrameProps> = ({ boss, latestHit }) => {
     video.muted = true;
     video.play().catch(() => {});
 
+    const BG_THRESH = 8;
+    const FEATHER_THRESH = 22;
+
     const render = () => {
       if (!isMounted) return;
 
       if (video.readyState >= 2 && !video.paused) {
-        const w = canvas.width;
-        const h = canvas.height;
-
         ctx.clearRect(0, 0, w, h);
         ctx.drawImage(video, 0, 0, w, h);
 
         const frame = ctx.getImageData(0, 0, w, h);
         const data = frame.data;
-        const len = data.length;
 
-        // Chroma / Luma Keying: Black to transparent
-        for (let i = 0; i < len; i += 4) {
-          const r = data[i];
-          const g = data[i + 1];
-          const b = data[i + 2];
+        // Reset visited buffer
+        visited.fill(0);
+        let qHead = 0;
+        let qTail = 0;
 
-          // Compute max channel brightness
-          const max = Math.max(r, g, b);
+        // Seed 4 outer borders (exterior background only)
+        for (let x = 0; x < w; x++) {
+          // Top row
+          let p = x * 4;
+          if (data[p] <= BG_THRESH && data[p + 1] <= BG_THRESH && data[p + 2] <= BG_THRESH) {
+            visited[x] = 1;
+            queue[qTail++] = x;
+          }
+          // Bottom row
+          let bIdx = (h - 1) * w + x;
+          p = bIdx * 4;
+          if (data[p] <= BG_THRESH && data[p + 1] <= BG_THRESH && data[p + 2] <= BG_THRESH) {
+            visited[bIdx] = 1;
+            queue[qTail++] = bIdx;
+          }
+        }
+        for (let y = 0; y < h; y++) {
+          // Left col
+          let lIdx = y * w;
+          let p = lIdx * 4;
+          if (!visited[lIdx] && data[p] <= BG_THRESH && data[p + 1] <= BG_THRESH && data[p + 2] <= BG_THRESH) {
+            visited[lIdx] = 1;
+            queue[qTail++] = lIdx;
+          }
+          // Right col
+          let rIdx = y * w + (w - 1);
+          p = rIdx * 4;
+          if (!visited[rIdx] && data[p] <= BG_THRESH && data[p + 1] <= BG_THRESH && data[p + 2] <= BG_THRESH) {
+            visited[rIdx] = 1;
+            queue[qTail++] = rIdx;
+          }
+        }
 
-          // Threshold: < 20 is completely transparent, 20-50 is feathered
-          if (max <= 20) {
-            data[i + 3] = 0;
-          } else if (max < 50) {
-            data[i + 3] = Math.floor(((max - 20) / 30) * 255);
+        // Fast 4-way BFS expansion for exterior black background
+        while (qHead < qTail) {
+          const curr = queue[qHead++];
+          const cx = curr % w;
+          const cy = (curr / w) | 0;
+
+          if (cy > 0) {
+            const nIdx = curr - w;
+            if (!visited[nIdx]) {
+              const p = nIdx * 4;
+              if (data[p] <= BG_THRESH && data[p + 1] <= BG_THRESH && data[p + 2] <= BG_THRESH) {
+                visited[nIdx] = 1;
+                queue[qTail++] = nIdx;
+              }
+            }
+          }
+          if (cy < h - 1) {
+            const nIdx = curr + w;
+            if (!visited[nIdx]) {
+              const p = nIdx * 4;
+              if (data[p] <= BG_THRESH && data[p + 1] <= BG_THRESH && data[p + 2] <= BG_THRESH) {
+                visited[nIdx] = 1;
+                queue[qTail++] = nIdx;
+              }
+            }
+          }
+          if (cx > 0) {
+            const nIdx = curr - 1;
+            if (!visited[nIdx]) {
+              const p = nIdx * 4;
+              if (data[p] <= BG_THRESH && data[p + 1] <= BG_THRESH && data[p + 2] <= BG_THRESH) {
+                visited[nIdx] = 1;
+                queue[qTail++] = nIdx;
+              }
+            }
+          }
+          if (cx < w - 1) {
+            const nIdx = curr + 1;
+            if (!visited[nIdx]) {
+              const p = nIdx * 4;
+              if (data[p] <= BG_THRESH && data[p + 1] <= BG_THRESH && data[p + 2] <= BG_THRESH) {
+                visited[nIdx] = 1;
+                queue[qTail++] = nIdx;
+              }
+            }
+          }
+        }
+
+        // Apply alpha mask + boundary antialiasing
+        for (let y = 0; y < h; y++) {
+          for (let x = 0; x < w; x++) {
+            const idx = y * w + x;
+            const p = idx * 4;
+            if (visited[idx] === 1) {
+              data[p + 3] = 0;
+            } else {
+              // Edge smoothing for character silhouette border
+              const touchesBg =
+                (x > 0 && visited[idx - 1] === 1) ||
+                (x < w - 1 && visited[idx + 1] === 1) ||
+                (y > 0 && visited[idx - w] === 1) ||
+                (y < h - 1 && visited[idx + w] === 1);
+
+              if (touchesBg) {
+                const maxVal = Math.max(data[p], data[p + 1], data[p + 2]);
+                if (maxVal < FEATHER_THRESH) {
+                  const factor = (maxVal - BG_THRESH) / (FEATHER_THRESH - BG_THRESH);
+                  data[p + 3] = Math.max(0, Math.min(255, (factor * 255) | 0));
+                } else {
+                  data[p + 3] = 255;
+                }
+              } else {
+                data[p + 3] = 255;
+              }
+            }
           }
         }
 
@@ -181,18 +293,18 @@ export const BossFrame: React.FC<BossFrameProps> = ({ boss, latestHit }) => {
         }
         className="relative flex flex-col items-center overflow-visible"
       >
-        {/* Glowing Fiery Ground Shadow beneath Boss */}
+        {/* Subtle Volcanic Ground Base Glow */}
         <div
-          className={`absolute bottom-6 w-60 h-14 rounded-full blur-2xl pointer-events-none transition-all duration-300 ${
+          className={`absolute bottom-2 w-56 h-10 rounded-full blur-xl pointer-events-none transition-all duration-300 ${
             isLowHp
-              ? 'bg-red-600/70 shadow-[0_0_40px_rgba(239,68,68,0.9)] animate-pulse'
+              ? 'bg-red-600/60 shadow-[0_0_35px_rgba(239,68,68,0.8)] animate-pulse'
               : isPhase2
-              ? 'bg-orange-500/60 shadow-[0_0_35px_rgba(249,115,22,0.8)]'
-              : 'bg-amber-600/40 shadow-[0_0_25px_rgba(245,158,11,0.5)]'
+              ? 'bg-orange-600/50 shadow-[0_0_30px_rgba(234,88,12,0.7)]'
+              : 'bg-amber-700/30 shadow-[0_0_20px_rgba(217,119,6,0.4)]'
           }`}
         />
 
-        {/* 100% Transparent Chroma-Keyed Canvas Output (Zero Black Box) */}
+        {/* 100% Transparent Chroma-Keyed Canvas Output (Zero Black Box, Solid Armor) */}
         <div className="relative w-80 h-48 md:w-[420px] md:h-[240px] flex items-center justify-center overflow-visible">
           <canvas
             ref={canvasRef}
@@ -202,8 +314,8 @@ export const BossFrame: React.FC<BossFrameProps> = ({ boss, latestHit }) => {
               isLowHp
                 ? 'drop-shadow-[0_0_25px_rgba(239,68,68,0.9)]'
                 : isPhase2
-                ? 'drop-shadow-[0_0_20px_rgba(249,115,22,0.8)]'
-                : 'drop-shadow-[0_0_15px_rgba(245,158,11,0.6)]'
+                ? 'drop-shadow-[0_0_20px_rgba(234,88,12,0.85)]'
+                : 'drop-shadow-[0_0_15px_rgba(217,119,6,0.6)]'
             }`}
           />
 
