@@ -11,8 +11,9 @@ interface BossFrameProps {
 export const BossFrame: React.FC<BossFrameProps> = ({ boss, latestHit }) => {
   const [isHitShaking, setIsHitShaking] = useState(false);
   const [showEnrageBanner, setShowEnrageBanner] = useState(false);
-  const [hasVideoError, setHasVideoError] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
 
   const hpPercent = (boss.currentHp / (boss.maxHp || 1)) * 100;
   const isPhase2 = boss.phase === 2 || boss.isEnraged || hpPercent <= 50;
@@ -24,6 +25,66 @@ export const BossFrame: React.FC<BossFrameProps> = ({ boss, latestHit }) => {
       videoRef.current.playbackRate = isPhase2 ? 1.25 : 1.0;
     }
   }, [isPhase2]);
+
+  // Real-time Black-to-Transparent Luma/Chroma Keyer on Canvas
+  useEffect(() => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return;
+
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return;
+
+    let isRunning = true;
+
+    const renderLoop = () => {
+      if (!isRunning) return;
+
+      if (video.readyState >= 2 && !video.paused && !video.ended) {
+        const width = canvas.width;
+        const height = canvas.height;
+
+        ctx.clearRect(0, 0, width, height);
+        ctx.drawImage(video, 0, 0, width, height);
+
+        const imgData = ctx.getImageData(0, 0, width, height);
+        const data = imgData.data;
+        const len = data.length;
+
+        // Chroma / Luma Key: Remove black background smoothly with feathering
+        for (let i = 0; i < len; i += 4) {
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+
+          // Compute max brightness of current pixel
+          const maxVal = Math.max(r, g, b);
+
+          // Black threshold
+          if (maxVal <= 14) {
+            data[i + 3] = 0; // Pure Transparent
+          } else if (maxVal < 42) {
+            // Smooth edge feathering
+            const alpha = Math.round(((maxVal - 14) / (42 - 14)) * 255);
+            data[i + 3] = alpha;
+          }
+        }
+
+        ctx.putImageData(imgData, 0, 0);
+      }
+
+      animationFrameRef.current = requestAnimationFrame(renderLoop);
+    };
+
+    renderLoop();
+
+    return () => {
+      isRunning = false;
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
+  }, []);
 
   // Trigger hit shake on incoming damage
   useEffect(() => {
@@ -43,7 +104,19 @@ export const BossFrame: React.FC<BossFrameProps> = ({ boss, latestHit }) => {
   }, [isPhase2, boss.isDefeated]);
 
   return (
-    <div className="relative flex flex-col items-center select-none">
+    <div className="relative flex flex-col items-center select-none overflow-visible">
+      {/* Hidden Source Video for Canvas Processing */}
+      <video
+        ref={videoRef}
+        src="/boss.mp4"
+        autoPlay
+        loop
+        muted
+        playsInline
+        crossOrigin="anonymous"
+        className="hidden"
+      />
+
       {/* Phase 2 / Enrage Pop-up Banner Alert */}
       <AnimatePresence>
         {showEnrageBanner && (
@@ -51,7 +124,7 @@ export const BossFrame: React.FC<BossFrameProps> = ({ boss, latestHit }) => {
             initial={{ opacity: 0, y: -20, scale: 0.8 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -20, scale: 0.8 }}
-            className="absolute -top-12 z-40 flex items-center gap-2 px-4 py-1.5 rounded-xl bg-gradient-to-r from-red-600 via-orange-500 to-red-600 text-white font-black text-sm font-cinzel shadow-[0_0_25px_rgba(239,68,68,0.9)] border border-amber-300 tracking-widest"
+            className="absolute -top-10 z-40 flex items-center gap-2 px-4 py-1.5 rounded-xl bg-gradient-to-r from-red-600 via-orange-500 to-red-600 text-white font-black text-sm font-cinzel shadow-[0_0_30px_rgba(239,68,68,0.9)] border border-amber-300 tracking-widest"
           >
             <Flame className="w-5 h-5 animate-bounce fill-amber-200 text-amber-200" />
             <span>⚔️ BOSS ENRAGED • PHASE 2 ACTIVATED! ⚔️</span>
@@ -60,30 +133,30 @@ export const BossFrame: React.FC<BossFrameProps> = ({ boss, latestHit }) => {
         )}
       </AnimatePresence>
 
-      {/* Main Boss Frame Chassis */}
+      {/* Free-Standing Animated Boss Character (Zero Card Borders, Zero Background Box) */}
       <motion.div
         animate={
           boss.isDefeated
             ? {
-                scale: [1, 1.15, 0.9, 0.4, 0],
+                scale: [1, 1.2, 0.8, 0.3, 0],
                 opacity: [1, 0.9, 0.6, 0.2, 0],
                 filter: [
                   'brightness(1) contrast(1)',
                   'brightness(3) contrast(2) hue-rotate(90deg)',
-                  'brightness(4) blur(10px)',
-                  'brightness(10) blur(20px)',
-                  'brightness(0) blur(30px)'
+                  'brightness(5) blur(12px)',
+                  'brightness(10) blur(24px)',
+                  'brightness(0) blur(40px)'
                 ],
-                rotate: [0, -3, 3, -8, 12]
+                rotate: [0, -4, 4, -10, 15]
               }
             : isHitShaking
             ? {
-                x: [0, -8, 8, -5, 5, 0],
-                y: [0, 4, -4, 2, 0],
-                scale: [1, 0.96, 1.02, 1]
+                x: [0, -10, 10, -6, 6, 0],
+                y: [0, 5, -5, 3, 0],
+                scale: [1, 0.95, 1.03, 1]
               }
             : {
-                y: [0, -4, 0]
+                y: [0, -5, 0]
               }
         }
         transition={
@@ -91,89 +164,58 @@ export const BossFrame: React.FC<BossFrameProps> = ({ boss, latestHit }) => {
             ? { duration: 1.8, ease: 'easeInOut' }
             : isHitShaking
             ? { duration: 0.3 }
-            : { duration: 5, repeat: Infinity, ease: 'easeInOut' }
+            : { duration: 4.5, repeat: Infinity, ease: 'easeInOut' }
         }
-        className="relative group flex flex-col items-center"
+        className="relative flex flex-col items-center overflow-visible"
       >
-        {/* Enrage Flaming Aura Backlight */}
-        {isPhase2 && !boss.isDefeated && (
-          <motion.div
-            animate={{
-              scale: [1, 1.08, 1],
-              opacity: [0.7, 1, 0.7]
-            }}
-            transition={{ duration: 1.5, repeat: Infinity }}
-            className="absolute -inset-6 rounded-full bg-gradient-to-r from-red-600/50 via-orange-600/60 to-amber-500/50 blur-2xl -z-10 pointer-events-none"
-          />
-        )}
-
-        {/* Boss Creature Container */}
+        {/* Dynamic Fiery Ground Shadow / Aura beneath Boss feet */}
         <div
-          className={`relative w-64 h-64 md:w-80 md:h-80 rounded-2xl overflow-hidden border-2 transition-all duration-300 ${
+          className={`absolute bottom-6 w-56 h-12 rounded-full blur-xl pointer-events-none transition-all duration-300 ${
             isLowHp
-              ? 'border-red-500/90 shadow-[0_0_30px_rgba(239,68,68,0.9)] animate-pulse'
+              ? 'bg-red-600/70 shadow-[0_0_40px_rgba(239,68,68,0.9)] animate-pulse'
               : isPhase2
-              ? 'border-orange-500/80 shadow-[0_0_25px_rgba(249,115,22,0.8)]'
-              : 'border-amber-500/50 shadow-[0_0_20px_rgba(0,0,0,0.9)]'
-          } bg-gradient-to-b from-slate-900/90 via-black to-slate-950`}
-        >
-          {/* Living Animated Video Loop */}
-          {!hasVideoError ? (
-            <video
-              ref={videoRef}
-              src="/boss.mp4"
-              autoPlay
-              loop
-              muted
-              playsInline
-              onError={() => setHasVideoError(true)}
-              className={`w-full h-full object-cover object-top transition-all duration-300 ${
-                isPhase2 ? 'contrast-125 saturate-125' : ''
-              }`}
-            />
-          ) : (
-            <img
-              src={boss.avatarUrl || '/boss.png'}
-              alt={boss.name}
-              className={`w-full h-full object-cover object-top transition-all duration-300 ${
-                isPhase2 ? 'contrast-125 saturate-125' : ''
-              }`}
-            />
-          )}
+              ? 'bg-orange-500/60 shadow-[0_0_35px_rgba(249,115,22,0.8)]'
+              : 'bg-amber-600/40 shadow-[0_0_25px_rgba(245,158,11,0.5)]'
+          }`}
+        />
 
-          {/* Hit Flash Overlay */}
+        {/* Free-Standing Boss Canvas (100% Transparent Background) */}
+        <div className="relative w-72 h-72 md:w-96 md:h-96 flex items-center justify-center overflow-visible">
+          <canvas
+            ref={canvasRef}
+            width={512}
+            height={512}
+            className={`w-full h-full object-contain pointer-events-none transition-all duration-300 ${
+              isLowHp
+                ? 'drop-shadow-[0_0_25px_rgba(239,68,68,0.9)] drop-shadow-[0_15px_30px_rgba(0,0,0,0.9)]'
+                : isPhase2
+                ? 'drop-shadow-[0_0_20px_rgba(249,115,22,0.8)] drop-shadow-[0_15px_30px_rgba(0,0,0,0.9)] contrast-125'
+                : 'drop-shadow-[0_0_15px_rgba(245,158,11,0.5)] drop-shadow-[0_15px_30px_rgba(0,0,0,0.95)]'
+            }`}
+          />
+
+          {/* Hit Flash Red Shockwave */}
           {isHitShaking && (
-            <div className="absolute inset-0 bg-red-500/30 mix-blend-color-dodge pointer-events-none animate-ping" />
+            <div className="absolute inset-0 bg-red-500/20 mix-blend-color-dodge pointer-events-none animate-ping rounded-full blur-md" />
           )}
+        </div>
 
-          {/* Bottom Gradient for Name Overlay */}
-          <div className="absolute inset-x-0 bottom-0 h-28 bg-gradient-to-t from-black via-black/80 to-transparent pointer-events-none" />
-
-          {/* Boss Badge / Status Ribbon */}
-          <div className="absolute top-2 left-2 flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-black/80 backdrop-blur-md border border-amber-500/40 text-[11px] font-bold text-amber-300 shadow-lg">
+        {/* RPG Floating Nameplate & Level Tag directly below Boss Character */}
+        <div className="flex flex-col items-center gap-1 -mt-4 z-20">
+          <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-slate-950/90 backdrop-blur-md border border-amber-500/50 shadow-[0_4px_15px_rgba(0,0,0,0.9)]">
             <Skull className="w-3.5 h-3.5 text-red-400" />
-            <span className="font-cinzel">LVL 99 WORLD BOSS</span>
-          </div>
-
-          {/* Enrage Flare Flame Icon Top Right */}
-          {isPhase2 && (
-            <motion.div
-              animate={{ rotate: [0, 10, -10, 0] }}
-              transition={{ repeat: Infinity, duration: 1 }}
-              className="absolute top-2 right-2 p-1.5 rounded-lg bg-red-950/80 border border-red-500 text-red-400 shadow-[0_0_10px_rgba(239,68,68,0.8)]"
-            >
-              <Flame className="w-4 h-4 fill-red-500" />
-            </motion.div>
-          )}
-
-          {/* Boss Name & Title Banner at bottom of frame */}
-          <div className="absolute inset-x-0 bottom-2 px-3 text-center">
-            <h2 className="text-sm md:text-base font-black text-transparent bg-clip-text bg-gradient-to-r from-amber-200 via-yellow-400 to-amber-200 font-cinzel tracking-wider drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)]">
+            <span className="font-cinzel text-xs font-black text-transparent bg-clip-text bg-gradient-to-r from-amber-200 via-yellow-400 to-amber-200 tracking-wider">
               {boss.name}
-            </h2>
-            <p className="text-[10px] text-slate-300 font-medium tracking-wide">
-              {boss.title}
-            </p>
+            </span>
+            <span className="text-[10px] font-bold text-amber-400 bg-amber-950/80 px-1.5 py-0.2 rounded border border-amber-500/40">
+              LVL 99
+            </span>
+            {isPhase2 && (
+              <span className="text-[10px] font-black text-red-400 flex items-center gap-0.5 animate-pulse">
+                <Flame className="w-3 h-3 fill-red-400" />
+                PHASE 2
+              </span>
+            )}
           </div>
         </div>
       </motion.div>
