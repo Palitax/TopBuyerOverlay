@@ -11,8 +11,8 @@ interface BossFrameProps {
 export const BossFrame: React.FC<BossFrameProps> = ({ boss, latestHit }) => {
   const [isHitShaking, setIsHitShaking] = useState(false);
   const [showEnrageBanner, setShowEnrageBanner] = useState(false);
-  const [videoError, setVideoError] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const hpPercent = (boss.currentHp / (boss.maxHp || 1)) * 100;
   const isPhase2 = boss.phase === 2 || boss.isEnraged || hpPercent <= 50;
@@ -20,16 +20,75 @@ export const BossFrame: React.FC<BossFrameProps> = ({ boss, latestHit }) => {
 
   const bossName = boss?.name || "VOD'KOR DER INFERNO-FÜRST";
 
-  // Ensure video autoplays and adjusts speed when enraged
+  // Control playback speed for Enrage phase
   useEffect(() => {
     const video = videoRef.current;
     if (video) {
       video.playbackRate = isPhase2 ? 1.25 : 1.0;
-      video.play().catch(() => {
-        // Autoplay policy fallback
-      });
     }
   }, [isPhase2]);
+
+  // Real-time Canvas Black-Removal Chroma Keyer
+  // This turns near-black video pixels into 100% transparent alpha on transparent OBS canvas
+  useEffect(() => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return;
+
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return;
+
+    let animId: number;
+    let isMounted = true;
+
+    // Start video playback
+    video.muted = true;
+    video.play().catch(() => {});
+
+    const render = () => {
+      if (!isMounted) return;
+
+      if (video.readyState >= 2 && !video.paused) {
+        const w = canvas.width;
+        const h = canvas.height;
+
+        ctx.clearRect(0, 0, w, h);
+        ctx.drawImage(video, 0, 0, w, h);
+
+        const frame = ctx.getImageData(0, 0, w, h);
+        const data = frame.data;
+        const len = data.length;
+
+        // Chroma / Luma Keying: Black to transparent
+        for (let i = 0; i < len; i += 4) {
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+
+          // Compute max channel brightness
+          const max = Math.max(r, g, b);
+
+          // Threshold: < 20 is completely transparent, 20-50 is feathered
+          if (max <= 20) {
+            data[i + 3] = 0;
+          } else if (max < 50) {
+            data[i + 3] = Math.floor(((max - 20) / 30) * 255);
+          }
+        }
+
+        ctx.putImageData(frame, 0, 0);
+      }
+
+      animId = requestAnimationFrame(render);
+    };
+
+    render();
+
+    return () => {
+      isMounted = false;
+      if (animId) cancelAnimationFrame(animId);
+    };
+  }, []);
 
   // Trigger hit shake on incoming damage
   useEffect(() => {
@@ -50,6 +109,27 @@ export const BossFrame: React.FC<BossFrameProps> = ({ boss, latestHit }) => {
 
   return (
     <div className="relative flex flex-col items-center select-none overflow-visible">
+      {/* Off-screen active video decoder (kept active in DOM so browser decodes frames for Canvas) */}
+      <video
+        ref={videoRef}
+        src="/boss.mp4"
+        autoPlay
+        loop
+        muted
+        playsInline
+        crossOrigin="anonymous"
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '1px',
+          height: '1px',
+          opacity: 0.001,
+          pointerEvents: 'none',
+          zIndex: -9999
+        }}
+      />
+
       {/* Phase 2 / Enrage Pop-up Banner Alert */}
       <AnimatePresence>
         {showEnrageBanner && (
@@ -66,7 +146,7 @@ export const BossFrame: React.FC<BossFrameProps> = ({ boss, latestHit }) => {
         )}
       </AnimatePresence>
 
-      {/* Free-Standing Animated Boss Character (Zero Card Borders, Zero Background Box) */}
+      {/* Free-Standing Boss Character Motion Wrapper */}
       <motion.div
         animate={
           boss.isDefeated
@@ -101,9 +181,9 @@ export const BossFrame: React.FC<BossFrameProps> = ({ boss, latestHit }) => {
         }
         className="relative flex flex-col items-center overflow-visible"
       >
-        {/* Dynamic Fiery Ground Shadow / Aura beneath Boss feet */}
+        {/* Glowing Fiery Ground Shadow beneath Boss */}
         <div
-          className={`absolute bottom-4 w-64 h-14 rounded-full blur-2xl pointer-events-none transition-all duration-300 ${
+          className={`absolute bottom-6 w-60 h-14 rounded-full blur-2xl pointer-events-none transition-all duration-300 ${
             isLowHp
               ? 'bg-red-600/70 shadow-[0_0_40px_rgba(239,68,68,0.9)] animate-pulse'
               : isPhase2
@@ -112,55 +192,29 @@ export const BossFrame: React.FC<BossFrameProps> = ({ boss, latestHit }) => {
           }`}
         />
 
-        {/* Boss Visual Container: Screen blend mode makes black background 100% transparent */}
-        <div className="relative w-80 h-80 md:w-96 md:h-96 flex items-center justify-center overflow-visible">
-          {!videoError ? (
-            <video
-              ref={videoRef}
-              src="/boss.mp4"
-              autoPlay
-              loop
-              muted
-              playsInline
-              onError={() => setVideoError(true)}
-              className={`w-full h-full object-contain pointer-events-none transition-all duration-300 ${
-                isLowHp
-                  ? 'contrast-125 saturate-150 drop-shadow-[0_0_30px_rgba(239,68,68,0.9)]'
-                  : isPhase2
-                  ? 'contrast-125 saturate-125 drop-shadow-[0_0_25px_rgba(249,115,22,0.8)]'
-                  : 'drop-shadow-[0_0_20px_rgba(245,158,11,0.6)]'
-              }`}
-              style={{
-                mixBlendMode: 'screen',
-                filter: isLowHp
-                  ? 'drop-shadow(0 0 25px #ef4444)'
-                  : isPhase2
-                  ? 'drop-shadow(0 0 20px #f97316)'
-                  : 'drop-shadow(0 0 15px rgba(245, 158, 11, 0.7))'
-              }}
-            />
-          ) : (
-            <img
-              src={boss.avatarUrl || '/boss.png'}
-              alt={bossName}
-              className={`w-full h-full object-contain pointer-events-none transition-all duration-300 ${
-                isPhase2 ? 'contrast-125 saturate-125' : ''
-              }`}
-              style={{
-                mixBlendMode: 'screen',
-                filter: 'drop-shadow(0 0 20px rgba(245, 158, 11, 0.6))'
-              }}
-            />
-          )}
+        {/* 100% Transparent Chroma-Keyed Canvas Output (Zero Black Box) */}
+        <div className="relative w-80 h-48 md:w-[420px] md:h-[240px] flex items-center justify-center overflow-visible">
+          <canvas
+            ref={canvasRef}
+            width={640}
+            height={360}
+            className={`w-full h-full object-contain pointer-events-none transition-all duration-300 ${
+              isLowHp
+                ? 'drop-shadow-[0_0_25px_rgba(239,68,68,0.9)]'
+                : isPhase2
+                ? 'drop-shadow-[0_0_20px_rgba(249,115,22,0.8)]'
+                : 'drop-shadow-[0_0_15px_rgba(245,158,11,0.6)]'
+            }`}
+          />
 
           {/* Hit Flash Red Shockwave */}
           {isHitShaking && (
-            <div className="absolute inset-0 bg-red-500/25 mix-blend-screen pointer-events-none animate-ping rounded-full blur-xl" />
+            <div className="absolute inset-0 bg-red-500/25 pointer-events-none animate-ping rounded-full blur-xl" />
           )}
         </div>
 
         {/* RPG Floating Nameplate & Level Tag */}
-        <div className="flex flex-col items-center gap-1 -mt-4 z-20">
+        <div className="flex flex-col items-center gap-1 mt-1 z-20">
           <div className="flex items-center gap-2 px-3.5 py-1 rounded-full bg-slate-950/90 backdrop-blur-md border border-amber-500/60 shadow-[0_4px_20px_rgba(0,0,0,0.95)]">
             <Skull className="w-3.5 h-3.5 text-red-400" />
             <span className="font-cinzel text-xs font-black text-amber-300 tracking-wider drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)]">
