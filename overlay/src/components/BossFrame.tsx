@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { BossState, RaidHitEvent } from '../types';
 import { Flame, Skull } from 'lucide-react';
@@ -11,10 +11,19 @@ interface BossFrameProps {
 export const BossFrame: React.FC<BossFrameProps> = ({ boss, latestHit }) => {
   const [isHitShaking, setIsHitShaking] = useState(false);
   const [showEnrageBanner, setShowEnrageBanner] = useState(false);
+  const [hasVideoError, setHasVideoError] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const hpPercent = (boss.currentHp / (boss.maxHp || 1)) * 100;
   const isPhase2 = boss.phase === 2 || boss.isEnraged || hpPercent <= 50;
   const isLowHp = hpPercent > 0 && hpPercent <= 15;
+
+  // Faster breathing and pulsing when Enraged in Phase 2
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.playbackRate = isPhase2 ? 1.25 : 1.0;
+    }
+  }, [isPhase2]);
 
   // Trigger hit shake on incoming damage
   useEffect(() => {
@@ -74,7 +83,7 @@ export const BossFrame: React.FC<BossFrameProps> = ({ boss, latestHit }) => {
                 scale: [1, 0.96, 1.02, 1]
               }
             : {
-                y: [0, -6, 0]
+                y: [0, -4, 0]
               }
         }
         transition={
@@ -82,7 +91,7 @@ export const BossFrame: React.FC<BossFrameProps> = ({ boss, latestHit }) => {
             ? { duration: 1.8, ease: 'easeInOut' }
             : isHitShaking
             ? { duration: 0.3 }
-            : { duration: 4, repeat: Infinity, ease: 'easeInOut' }
+            : { duration: 5, repeat: Infinity, ease: 'easeInOut' }
         }
         className="relative group flex flex-col items-center"
       >
@@ -98,7 +107,7 @@ export const BossFrame: React.FC<BossFrameProps> = ({ boss, latestHit }) => {
           />
         )}
 
-        {/* Boss Creature Image Container */}
+        {/* Boss Creature Container */}
         <div
           className={`relative w-64 h-64 md:w-80 md:h-80 rounded-2xl overflow-hidden border-2 transition-all duration-300 ${
             isLowHp
@@ -108,14 +117,29 @@ export const BossFrame: React.FC<BossFrameProps> = ({ boss, latestHit }) => {
               : 'border-amber-500/50 shadow-[0_0_20px_rgba(0,0,0,0.9)]'
           } bg-gradient-to-b from-slate-900/90 via-black to-slate-950`}
         >
-          {/* Boss Image */}
-          <img
-            src={boss.avatarUrl || '/boss.png'}
-            alt={boss.name}
-            className={`w-full h-full object-cover object-top transition-all duration-300 ${
-              isPhase2 ? 'contrast-125 saturate-125' : ''
-            }`}
-          />
+          {/* Living Animated Video Loop */}
+          {!hasVideoError ? (
+            <video
+              ref={videoRef}
+              src="/boss.mp4"
+              autoPlay
+              loop
+              muted
+              playsInline
+              onError={() => setHasVideoError(true)}
+              className={`w-full h-full object-cover object-top transition-all duration-300 ${
+                isPhase2 ? 'contrast-125 saturate-125' : ''
+              }`}
+            />
+          ) : (
+            <img
+              src={boss.avatarUrl || '/boss.png'}
+              alt={boss.name}
+              className={`w-full h-full object-cover object-top transition-all duration-300 ${
+                isPhase2 ? 'contrast-125 saturate-125' : ''
+              }`}
+            />
+          )}
 
           {/* Hit Flash Overlay */}
           {isHitShaking && (
