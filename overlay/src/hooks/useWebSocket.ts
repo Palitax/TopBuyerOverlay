@@ -1,48 +1,39 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { LeaderboardState, PurchaseEvent, WSMessage, WSMessageType } from '../types';
-import { useSoundEffects } from './useSoundEffects';
-import { getInitialDemoState, simulateClientPurchase } from '../utils/simulation';
+import { RaidState, RaidHitEvent, WSMessage, WSMessageType, RaidConfig, UnlockedKGA } from '../types';
+import { useRaidAudio } from './useRaidAudio';
+import { getInitialDemoState, simulateClientHit } from '../utils/simulation';
 
 export type ConnectionStatus = 'connected' | 'connecting' | 'disconnected';
 
-export interface RankUpEventPayload {
-  username: string;
-  oldTier: number;
-  newTier: number;
-  newRankTitle: string;
-  purchaseEvent: PurchaseEvent;
-}
-
-const BROADCAST_BUS_NAME = 'top_buyer_mana_bus';
-const DEFAULT_CLOUD_ROOM = 'whatnot_mana_palitax_sync';
+const BROADCAST_BUS_NAME = 'whatnot_raid_boss_bus';
+const DEFAULT_CLOUD_ROOM = 'whatnot_raid_boss_palitax_sync';
 
 export function getSyncRoom(): string {
   if (typeof window === 'undefined') return DEFAULT_CLOUD_ROOM;
   const params = new URLSearchParams(window.location.search);
-  return params.get('room') || localStorage.getItem('whatnot_mana_sync_room') || DEFAULT_CLOUD_ROOM;
+  return params.get('room') || localStorage.getItem('whatnot_raid_sync_room') || DEFAULT_CLOUD_ROOM;
 }
 
 export function useWebSocket(customUrl?: string) {
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
-  const [state, setState] = useState<LeaderboardState>(() => {
+  const [state, setState] = useState<RaidState>(() => {
     try {
-      const saved = localStorage.getItem('whatnot_mana_demo_state');
+      const saved = localStorage.getItem('whatnot_raid_state');
       if (saved) return JSON.parse(saved);
     } catch (e) {}
     return getInitialDemoState();
   });
 
-  const [latestPurchase, setLatestPurchase] = useState<PurchaseEvent | null>(null);
-  const [latestRankUp, setLatestRankUp] = useState<RankUpEventPayload | null>(null);
+  const [latestHit, setLatestHit] = useState<RaidHitEvent | null>(null);
 
-  const clientIdRef = useRef<string>('client_' + Math.random().toString(36).substring(2, 9));
+  const clientIdRef = useRef<string>('raid_client_' + Math.random().toString(36).substring(2, 9));
   const wsRef = useRef<WebSocket | null>(null);
   const cloudSseRef = useRef<EventSource | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
-  const processedAlertIds = useRef<Set<string>>(new Set());
-  const { playManaSound, playRankUpSound } = useSoundEffects();
+  const processedHitIds = useRef<Set<string>>(new Set());
 
-  // Dynamic host determination for optional local/cloud backend server
+  const { playSlash, playCrit, playDefeat, playChest } = useRaidAudio();
+
   const getEndpoints = useCallback(() => {
     if (customUrl) {
       const httpOrigin = customUrl.replace(/^ws(s)?:/, 'http$1:');
@@ -69,8 +60,7 @@ export function useWebSocket(customUrl?: string) {
 
     const hostname = typeof window !== 'undefined' ? (window.location.hostname || 'localhost') : 'localhost';
     const isCloudHost = hostname.includes('vercel.app') || hostname.includes('netlify.app');
-    
-    // On Vercel without ?server param, we don't have a local backend port 8080 running in cloud
+
     if (isCloudHost) {
       return {
         wsUrl: '',
@@ -94,61 +84,46 @@ export function useWebSocket(customUrl?: string) {
     (msg: WSMessage) => {
       switch (msg.type) {
         case 'INIT_STATE':
-        case 'LEADERBOARD_UPDATE': {
-          if (msg.payload) {
-            const normalizedPayload: LeaderboardState = {
-              ...msg.payload,
-              leaderboard: msg.payload.leaderboard || []
-            };
-            setState(normalizedPayload);
+        case 'RAID_STATE_UPDATE': {
+          if (msg.payload && msg.payload.boss) {
+            setState(msg.payload);
             try {
-              localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(normalizedPayload));
+              localStorage.setItem('whatnot_raid_state', JSON.stringify(msg.payload));
             } catch (e) {}
           }
           break;
         }
 
-        case 'PURCHASE_ALERT': {
-          const purchase: PurchaseEvent = msg.payload;
-          if (!purchase) break;
+        case 'HIT_ALERT': {
+          const hit: RaidHitEvent = msg.payload;
+          if (!hit) break;
 
-          if (purchase.id && processedAlertIds.current.has(purchase.id)) {
+          if (hit.id && processedHitIds.current.has(hit.id)) {
             break;
           }
-          if (purchase.id) {
-            processedAlertIds.current.add(purchase.id);
-            if (processedAlertIds.current.size > 100) {
-              const oldest = processedAlertIds.current.values().next().value;
-              if (oldest) processedAlertIds.current.delete(oldest);
+          if (hit.id) {
+            processedHitIds.current.add(hit.id);
+            if (processedHitIds.current.size > 100) {
+              const oldest = processedHitIds.current.values().next().value;
+              if (oldest) processedHitIds.current.delete(oldest);
             }
           }
 
-          setLatestPurchase(purchase);
+          setLatestHit(hit);
 
-          if (state?.config?.soundEnabled ?? true) {
-            playManaSound(state?.config?.soundVolume ?? 0.7);
-          }
-          break;
-        }
+          // Audio triggers
+          const soundEnabled = state.config?.soundEnabled ?? true;
+          const soundVolume = state.config?.soundVolume ?? 0.8;
 
-        case 'RANK_UP_ALERT': {
-          const rankUp: RankUpEventPayload = msg.payload;
-          if (!rankUp) break;
-
-          const alertKey = `rankup-${rankUp.username}-${rankUp.newTier}-${rankUp.purchaseEvent?.id || ''}`;
-          if (processedAlertIds.current.has(alertKey)) {
-            break;
-          }
-          processedAlertIds.current.add(alertKey);
-          if (processedAlertIds.current.size > 100) {
-            const oldest = processedAlertIds.current.values().next().value;
-            if (oldest) processedAlertIds.current.delete(oldest);
-          }
-
-          setLatestRankUp(rankUp);
-
-          if (state?.config?.soundEnabled ?? true) {
-            playRankUpSound(rankUp.newTier, state?.config?.soundVolume ?? 0.8);
+          if (soundEnabled) {
+            if (hit.triggeredDefeat || hit.newHp === 0) {
+              playDefeat(soundVolume);
+              setTimeout(() => playChest(soundVolume), 1200);
+            } else if (hit.isCrit || hit.tier === 'LEGENDARY' || hit.comboMultiplier >= 1.3) {
+              playCrit(soundVolume);
+            } else {
+              playSlash(soundVolume * 0.9);
+            }
           }
           break;
         }
@@ -157,10 +132,10 @@ export function useWebSocket(customUrl?: string) {
           break;
       }
     },
-    [state?.config?.soundEnabled, state?.config?.soundVolume, playManaSound, playRankUpSound]
+    [state.config?.soundEnabled, state.config?.soundVolume, playSlash, playCrit, playDefeat, playChest]
   );
 
-  // Cloud Sync Publisher (Cross-PC, Cross-Browser, OBS CEF sync via ntfy.sh)
+  // Cloud Sync Broadcast (ntfy.sh)
   const broadcastCloudSync = useCallback(async (data: any) => {
     const room = getSyncRoom();
     try {
@@ -168,7 +143,7 @@ export function useWebSocket(customUrl?: string) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Title': 'Whatnot Mana Leaderboard'
+          'Title': 'Whatnot Raid Boss Sync'
         },
         body: JSON.stringify({
           ...data,
@@ -176,18 +151,15 @@ export function useWebSocket(customUrl?: string) {
           timestamp: Date.now()
         })
       });
-    } catch (err) {
-      console.warn('[CloudSync] Broadcast error:', err);
-    }
+    } catch (err) {}
   }, []);
 
-  // 1. Cloud Sync SSE Listener (Works anywhere, connecting Chrome & OBS across all PCs)
+  // 1. Cloud SSE Listener
   useEffect(() => {
     const room = getSyncRoom();
     const cloudUrl = `https://ntfy.sh/${room}/sse`;
     let sse: EventSource | null = null;
 
-    // Immediately restore latest synced state from Cloud on load / refresh
     fetch(`https://ntfy.sh/${room}/json?poll=1`)
       .then((res) => res.text())
       .then((text) => {
@@ -199,10 +171,9 @@ export function useWebSocket(customUrl?: string) {
             if (item.message) {
               const parsed = JSON.parse(item.message);
               if (parsed.type === 'SYNC_STATE' && parsed.nextState) {
-                console.log('⚡ [CloudSync] Restored latest state from cloud:', parsed.nextState);
                 setState(parsed.nextState);
                 try {
-                  localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(parsed.nextState));
+                  localStorage.setItem('whatnot_raid_state', JSON.stringify(parsed.nextState));
                 } catch (e) {}
                 break;
               }
@@ -210,16 +181,13 @@ export function useWebSocket(customUrl?: string) {
           } catch (e) {}
         }
       })
-      .catch((err) => {
-        console.warn('[CloudSync] Poll error:', err);
-      });
+      .catch(() => {});
 
     try {
       sse = new EventSource(cloudUrl);
       cloudSseRef.current = sse;
 
       sse.onopen = () => {
-        console.log('⚡ [CloudSync] Connected to real-time room:', room);
         setStatus('connected');
       };
 
@@ -228,62 +196,53 @@ export function useWebSocket(customUrl?: string) {
           const parsed = JSON.parse(event.data);
           if (parsed.event === 'message' && parsed.message) {
             const data = JSON.parse(parsed.message);
-
-            // Ignore messages sent by this client instance
-            if (data.senderId === clientIdRef.current) {
-              return;
-            }
+            if (data.senderId === clientIdRef.current) return;
 
             if (data.type === 'SYNC_STATE' && data.nextState) {
               setState(data.nextState);
               try {
-                localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(data.nextState));
+                localStorage.setItem('whatnot_raid_state', JSON.stringify(data.nextState));
               } catch (e) {}
 
               if (data.event) {
                 handleIncomingMessage({
-                  type: 'PURCHASE_ALERT',
+                  type: 'HIT_ALERT',
                   payload: data.event
                 });
               }
-              if (data.rankUp) {
-                handleIncomingMessage({
-                  type: 'RANK_UP_ALERT',
-                  payload: data.rankUp
-                });
-              }
             } else if (data.type === 'SYNC_PURCHASE' && data.purchase) {
-              // Direct purchase event received from Chrome extension
+              // Purchase relayed from extension -> trigger hit
               setState((curr) => {
-                const result = simulateClientPurchase(curr, data.purchase);
+                const tier = data.purchase.price?.includes('€')
+                  ? parseFloat(data.purchase.price.replace(/[^\d.,]/g, '').replace(',', '.')) > 10
+                    ? 'LEGENDARY'
+                    : parseFloat(data.purchase.price.replace(/[^\d.,]/g, '').replace(',', '.')) > 5
+                    ? 'EPIC'
+                    : 'RARE'
+                  : 'RARE';
+
+                const result = simulateClientHit(curr, {
+                  buyer: data.purchase.username,
+                  tier,
+                  itemTitle: data.purchase.itemTitle,
+                  price: data.purchase.price
+                });
+
                 handleIncomingMessage({
-                  type: 'PURCHASE_ALERT',
+                  type: 'HIT_ALERT',
                   payload: result.event
                 });
-                if (result.isRankUp && result.rankUpPayload) {
-                  handleIncomingMessage({
-                    type: 'RANK_UP_ALERT',
-                    payload: result.rankUpPayload
-                  });
-                }
+
                 try {
-                  localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(result.nextState));
+                  localStorage.setItem('whatnot_raid_state', JSON.stringify(result.nextState));
                 } catch (e) {}
                 return result.nextState;
               });
             }
           }
-        } catch (err) {
-          // Keepalive or unformatted frame
-        }
+        } catch (err) {}
       };
-
-      sse.onerror = () => {
-        // EventSource auto-reconnects
-      };
-    } catch (e) {
-      console.warn('[CloudSync] Failed to initialize SSE:', e);
-    }
+    } catch (e) {}
 
     return () => {
       if (sse) sse.close();
@@ -291,7 +250,7 @@ export function useWebSocket(customUrl?: string) {
     };
   }, [handleIncomingMessage]);
 
-  // 2. BroadcastChannel + Storage Event Listener (Local tabs/windows in same browser)
+  // 2. BroadcastChannel + Storage Event Listener
   useEffect(() => {
     let bc: BroadcastChannel | null = null;
     try {
@@ -300,18 +259,12 @@ export function useWebSocket(customUrl?: string) {
         const data = event.data;
         if (!data) return;
 
-        if (data.type === 'CROSS_TAB_PURCHASE') {
+        if (data.type === 'CROSS_TAB_HIT') {
           if (data.nextState) setState(data.nextState);
           if (data.event) {
             handleIncomingMessage({
-              type: 'PURCHASE_ALERT',
+              type: 'HIT_ALERT',
               payload: data.event
-            });
-          }
-          if (data.rankUp) {
-            handleIncomingMessage({
-              type: 'RANK_UP_ALERT',
-              payload: data.rankUp
             });
           }
         } else if (data.type === 'CROSS_TAB_STATE') {
@@ -321,25 +274,19 @@ export function useWebSocket(customUrl?: string) {
     } catch (e) {}
 
     const handleStorageEvent = (e: StorageEvent) => {
-      if (e.key === 'whatnot_mana_cross_tab_event' && e.newValue) {
+      if (e.key === 'whatnot_raid_cross_tab_event' && e.newValue) {
         try {
           const parsed = JSON.parse(e.newValue);
           if (parsed.nextState) setState(parsed.nextState);
           if (parsed.event) {
             handleIncomingMessage({
-              type: 'PURCHASE_ALERT',
+              type: 'HIT_ALERT',
               payload: parsed.event
-            });
-          }
-          if (parsed.rankUp) {
-            handleIncomingMessage({
-              type: 'RANK_UP_ALERT',
-              payload: parsed.rankUp
             });
           }
         } catch (err) {}
       }
-      if (e.key === 'whatnot_mana_demo_state' && e.newValue) {
+      if (e.key === 'whatnot_raid_state' && e.newValue) {
         try {
           const parsedState = JSON.parse(e.newValue);
           setState(parsedState);
@@ -355,7 +302,7 @@ export function useWebSocket(customUrl?: string) {
     };
   }, [handleIncomingMessage]);
 
-  // 3. Connect local or custom WebSocket server (if running)
+  // 3. Connect local WebSocket Server
   const connectWs = useCallback(() => {
     const { wsUrl, hasDedicatedBackend } = getEndpoints();
     if (!hasDedicatedBackend || !wsUrl) return;
@@ -369,7 +316,6 @@ export function useWebSocket(customUrl?: string) {
       wsRef.current = ws;
 
       ws.onopen = () => {
-        console.log('[Realtime] WebSocket connected:', wsUrl);
         setStatus('connected');
         if (reconnectTimeoutRef.current) {
           clearTimeout(reconnectTimeoutRef.current);
@@ -381,16 +327,14 @@ export function useWebSocket(customUrl?: string) {
         try {
           const msg: WSMessage = JSON.parse(event.data);
           handleIncomingMessage(msg);
-        } catch (err) {
-          console.error('[Realtime] Error parsing WS message:', err);
-        }
+        } catch (err) {}
       };
 
       ws.onclose = () => {
         wsRef.current = null;
         reconnectTimeoutRef.current = window.setTimeout(() => {
           connectWs();
-        }, 4000);
+        }, 3000);
       };
 
       ws.onerror = () => {
@@ -410,7 +354,7 @@ export function useWebSocket(customUrl?: string) {
     };
   }, [connectWs]);
 
-  // Send message or mutation (Optimistic local update + Instant Cloud/Broadcast Sync)
+  // Send message / action (optimistic update + WS + CloudSync)
   const sendMessage = useCallback(
     (type: WSMessageType, payload: any = {}) => {
       // 1. Send via local WebSocket if available
@@ -424,66 +368,57 @@ export function useWebSocket(customUrl?: string) {
         );
       }
 
-      // 2. Perform instant optimistic local update & sync across tabs/OBS
-      if (type === 'NEW_PURCHASE') {
+      // 2. Client-side optimistic handling
+      if (type === 'RAID_HIT') {
         setState((curr) => {
-          const result = simulateClientPurchase(curr, payload);
+          const result = simulateClientHit(curr, payload);
 
-          // Local audio & visual trigger
           handleIncomingMessage({
-            type: 'PURCHASE_ALERT',
+            type: 'HIT_ALERT',
             payload: result.event
           });
-          if (result.isRankUp && result.rankUpPayload) {
-            handleIncomingMessage({
-              type: 'RANK_UP_ALERT',
-              payload: result.rankUpPayload
-            });
-          }
 
-          // Save to local storage
           try {
-            localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(result.nextState));
+            localStorage.setItem('whatnot_raid_state', JSON.stringify(result.nextState));
             localStorage.setItem(
-              'whatnot_mana_cross_tab_event',
+              'whatnot_raid_cross_tab_event',
               JSON.stringify({
                 event: result.event,
-                rankUp: result.rankUpPayload,
                 nextState: result.nextState,
                 timestamp: Date.now()
               })
             );
           } catch (e) {}
 
-          // Local BroadcastChannel
           try {
             const bc = new BroadcastChannel(BROADCAST_BUS_NAME);
             bc.postMessage({
-              type: 'CROSS_TAB_PURCHASE',
+              type: 'CROSS_TAB_HIT',
               event: result.event,
-              rankUp: result.rankUpPayload,
               nextState: result.nextState
             });
             bc.close();
           } catch (e) {}
 
-          // Cloud Sync across PCs & OBS CEF
           broadcastCloudSync({
             type: 'SYNC_STATE',
             event: result.event,
-            rankUp: result.rankUpPayload,
             nextState: result.nextState
           });
 
           return result.nextState;
         });
-      } else if (type === 'UPDATE_CONFIG') {
+      } else if (type === 'SHIELD_BOSS') {
         setState((curr) => {
-          const updatedConfig = { ...curr.config, ...payload };
-          const nextState = { ...curr, config: updatedConfig };
+          const amount = payload.amount || 100;
+          const nextShield = Math.min(curr.boss.maxShieldHp || 2000, curr.boss.shieldHp + amount);
+          const nextState: RaidState = {
+            ...curr,
+            boss: { ...curr.boss, shieldHp: nextShield }
+          };
 
           try {
-            localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(nextState));
+            localStorage.setItem('whatnot_raid_state', JSON.stringify(nextState));
           } catch (e) {}
 
           try {
@@ -495,14 +430,83 @@ export function useWebSocket(customUrl?: string) {
           broadcastCloudSync({ type: 'SYNC_STATE', nextState });
           return nextState;
         });
-      } else if (type === 'RESET_SESSION') {
+      } else if (type === 'TOGGLE_ENRAGE') {
+        setState((curr) => {
+          const nextEnraged = payload.active !== undefined ? payload.active : !curr.boss.isEnraged;
+          const nextState: RaidState = {
+            ...curr,
+            boss: {
+              ...curr.boss,
+              isEnraged: nextEnraged,
+              phase: nextEnraged ? 2 : curr.boss.phase
+            }
+          };
+
+          try {
+            localStorage.setItem('whatnot_raid_state', JSON.stringify(nextState));
+          } catch (e) {}
+
+          try {
+            const bc = new BroadcastChannel(BROADCAST_BUS_NAME);
+            bc.postMessage({ type: 'CROSS_TAB_STATE', nextState });
+            bc.close();
+          } catch (e) {}
+
+          broadcastCloudSync({ type: 'SYNC_STATE', nextState });
+          return nextState;
+        });
+      } else if (type === 'UNDO_HIT') {
+        // If WebSocket is offline, undo from recent hits
+        setState((curr) => {
+          if (curr.recentHits.length === 0) return curr;
+          const lastHit = curr.recentHits[0];
+          const remainingHits = curr.recentHits.slice(1);
+
+          const restoredHp = Math.min(curr.boss.maxHp, curr.boss.currentHp + lastHit.hpDamage);
+          const restoredShield = Math.min(curr.boss.maxShieldHp || 2000, curr.boss.shieldHp + lastHit.shieldAbsorbed);
+
+          const nextState: RaidState = {
+            ...curr,
+            boss: {
+              ...curr.boss,
+              currentHp: restoredHp,
+              shieldHp: restoredShield,
+              isDefeated: restoredHp === 0,
+              unlockedKga: {
+                ...curr.boss.unlockedKga,
+                isRevealed: restoredHp === 0
+              }
+            },
+            recentHits: remainingHits,
+            totalDamageDealt: Math.max(0, curr.totalDamageDealt - lastHit.totalDamage),
+            totalHits: Math.max(0, curr.totalHits - 1)
+          };
+
+          try {
+            localStorage.setItem('whatnot_raid_state', JSON.stringify(nextState));
+          } catch (e) {}
+
+          try {
+            const bc = new BroadcastChannel(BROADCAST_BUS_NAME);
+            bc.postMessage({ type: 'CROSS_TAB_STATE', nextState });
+            bc.close();
+          } catch (e) {}
+
+          broadcastCloudSync({ type: 'SYNC_STATE', nextState });
+          return nextState;
+        });
+      } else if (type === 'RESET_RAID') {
         const fresh = getInitialDemoState();
+        if (payload.hp) {
+          fresh.boss.maxHp = payload.hp;
+          fresh.boss.currentHp = payload.hp;
+        }
         setState(fresh);
 
         try {
-          localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(fresh));
+          localStorage.setItem('whatnot_raid_state', JSON.stringify(fresh));
           localStorage.setItem(
-            'whatnot_mana_cross_tab_event',
+            'whatnot_raid_cross_tab_event',
             JSON.stringify({ nextState: fresh, timestamp: Date.now() })
           );
         } catch (e) {}
@@ -514,18 +518,13 @@ export function useWebSocket(customUrl?: string) {
         } catch (e) {}
 
         broadcastCloudSync({ type: 'SYNC_STATE', nextState: fresh });
-      } else if (type === 'MANUAL_ADJUST') {
+      } else if (type === 'UPDATE_CONFIG') {
         setState((curr) => {
-          const { username, purchases } = payload;
-          const updated = curr.leaderboard.map((b) =>
-            b.username.toLowerCase() === username.toLowerCase()
-              ? { ...b, purchaseCount: purchases }
-              : b
-          );
-          const nextState = { ...curr, leaderboard: updated };
+          const updatedConfig: RaidConfig = { ...curr.config, ...payload };
+          const nextState: RaidState = { ...curr, config: updatedConfig };
 
           try {
-            localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(nextState));
+            localStorage.setItem('whatnot_raid_state', JSON.stringify(nextState));
           } catch (e) {}
 
           try {
@@ -537,15 +536,16 @@ export function useWebSocket(customUrl?: string) {
           broadcastCloudSync({ type: 'SYNC_STATE', nextState });
           return nextState;
         });
-      } else if (type === 'DELETE_USER') {
+      } else if (type === 'UPDATE_KGA') {
         setState((curr) => {
-          const updated = curr.leaderboard.filter(
-            (b) => b.username.toLowerCase() !== payload.username.toLowerCase()
-          );
-          const nextState = { ...curr, leaderboard: updated };
+          const updatedKga: UnlockedKGA = { ...curr.boss.unlockedKga, ...payload };
+          const nextState: RaidState = {
+            ...curr,
+            boss: { ...curr.boss, unlockedKga: updatedKga }
+          };
 
           try {
-            localStorage.setItem('whatnot_mana_demo_state', JSON.stringify(nextState));
+            localStorage.setItem('whatnot_raid_state', JSON.stringify(nextState));
           } catch (e) {}
 
           try {
@@ -562,17 +562,15 @@ export function useWebSocket(customUrl?: string) {
     [broadcastCloudSync, handleIncomingMessage]
   );
 
-  const clearAlerts = useCallback(() => {
-    setLatestPurchase(null);
-    setLatestRankUp(null);
+  const clearLatestHit = useCallback(() => {
+    setLatestHit(null);
   }, []);
 
   return {
     status,
     state,
-    latestPurchase,
-    latestRankUp,
+    latestHit,
     sendMessage,
-    clearAlerts
+    clearLatestHit
   };
 }

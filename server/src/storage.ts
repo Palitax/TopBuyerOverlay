@@ -1,97 +1,84 @@
 import fs from 'fs';
 import path from 'path';
-import { LeaderboardState, OverlayConfig, RankTier } from './types.js';
+import { RaidState, RaidConfig, BossState } from './types.js';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
-const STATE_FILE = path.join(DATA_DIR, 'session.json');
+const STATE_FILE = path.join(DATA_DIR, 'raid_state.json');
 
-export const RANK_ERZMAGUS: RankTier = {
-  tier: 5,
-  title: 'Erzmagus',
-  minPurchases: 1,
-  color: '#fbbf24', // amber-400 gold
-  glowColor: 'rgba(251, 191, 36, 0.9)',
-  badge: '🌟',
-  description: 'Exklusiver Platz 1 des Streams.'
-};
-
-export const RANK_MAGISTER: RankTier = {
-  tier: 4,
-  title: 'Magister',
-  minPurchases: 1,
-  color: '#c084fc', // purple-400
-  glowColor: 'rgba(192, 132, 252, 0.8)',
-  badge: '🔮',
-  description: 'Exklusiver Platz 2 des Streams.'
-};
-
-export const RANK_AKOLYTH: RankTier = {
-  tier: 3,
-  title: 'Akolyth',
-  minPurchases: 1,
-  color: '#38bdf8', // sky-400
-  glowColor: 'rgba(56, 189, 248, 0.7)',
-  badge: '⚡',
-  description: 'Exklusiver Platz 3 des Streams.'
-};
-
-export const RANK_NOVIZE: RankTier = {
-  tier: 1,
-  title: 'Novize',
-  minPurchases: 1,
-  color: '#94a3b8', // slate-400
-  glowColor: 'rgba(148, 163, 184, 0.5)',
-  badge: '📜',
-  description: 'Herausforderer auf dem Weg zum Podest.'
-};
-
-export const DEFAULT_RANKS: RankTier[] = [
-  RANK_NOVIZE,
-  RANK_AKOLYTH,
-  RANK_MAGISTER,
-  RANK_ERZMAGUS
-];
-
-export const DEFAULT_CONFIG: OverlayConfig = {
-  overlayTitle: '✨ Fantasy Mana Leaderboard ✨',
-  streamerName: 'Whatnot Streamer',
-  maxDisplayCount: 3,
+export const DEFAULT_CONFIG: RaidConfig = {
+  overlayTitle: '🔥 COMMUNITY RAID BOSS BATTLE 🔥',
   soundEnabled: true,
-  soundVolume: 0.7,
-  manaMultiplier: 100, // 1 purchase = 100 mana
-  ranks: DEFAULT_RANKS
+  soundVolume: 0.8,
+  rareDamage: 100,
+  epicDamage: 250,
+  legendaryDamage: 500,
+  bossMaxHp: 3000,
+  kgaRewardTitle: 'KGA #01 UNLOCKED: MYSTERY VMAX SLAB',
+  kgaRewardSubtitle: 'Herzlichen Glückwunsch an den Raid! KGA ist freigeschaltet!',
+  kgaRewardCode: 'KGA-RAID-VICTORY'
 };
 
-export const getDefaultState = (): LeaderboardState => ({
-  buyers: {},
-  recentPurchases: [],
-  config: DEFAULT_CONFIG,
-  totalPurchases: 0,
-  totalMana: 0,
+export const DEFAULT_BOSS: BossState = {
+  id: 'boss_vodkor',
+  name: "VOD'KOR DER INFERNO-FÜRST",
+  title: 'Höllenschmied des Untergangs • World Boss',
+  avatarUrl: '/boss.png',
+  maxHp: 3000,
+  currentHp: 3000,
+  shieldHp: 0,
+  maxShieldHp: 1000,
+  isEnraged: false,
+  isDefeated: false,
+  phase: 1,
+  unlockedKga: {
+    title: 'KGA #01 UNLOCKED: MYSTERY VMAX SLAB',
+    subtitle: 'Raid erfolgreich abgeschlossen! Neues KGA freigeschaltet.',
+    code: 'KGA-RAID-VICTORY',
+    isRevealed: false,
+    itemImage: '/boss.png'
+  }
+};
+
+export const getDefaultRaidState = (): RaidState => ({
+  boss: { ...DEFAULT_BOSS, unlockedKga: { ...DEFAULT_BOSS.unlockedKga } },
+  attackers: {},
+  topAttackers: [],
+  recentHits: [],
+  config: { ...DEFAULT_CONFIG },
+  totalDamageDealt: 0,
+  totalHits: 0,
+  currentCombo: {
+    count: 0,
+    multiplier: 1.0,
+    lastBuyer: '',
+    expiresAt: 0
+  },
   sessionStartTime: Date.now()
 });
 
-export function saveState(state: LeaderboardState): void {
+export function saveRaidState(state: RaidState): void {
   try {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
     fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), 'utf-8');
   } catch (error) {
-    console.error('[Storage] Error saving state:', error);
+    console.error('[Storage] Error saving raid state:', error);
   }
 }
 
-export function loadState(): LeaderboardState {
+export function loadRaidState(): RaidState {
   try {
     if (fs.existsSync(STATE_FILE)) {
       const data = fs.readFileSync(STATE_FILE, 'utf-8');
-      const parsed = JSON.parse(data) as LeaderboardState;
-      parsed.config = { ...DEFAULT_CONFIG, ...parsed.config };
-      return parsed;
+      const parsed = JSON.parse(data) as RaidState;
+      if (parsed.boss && parsed.config) {
+        parsed.config = { ...DEFAULT_CONFIG, ...parsed.config };
+        return parsed;
+      }
     }
   } catch (error) {
-    console.error('[Storage] Error loading state, starting fresh:', error);
+    console.error('[Storage] Error loading raid state, starting fresh:', error);
   }
-  return getDefaultState();
+  return getDefaultRaidState();
 }

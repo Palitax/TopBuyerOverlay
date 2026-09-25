@@ -2,8 +2,8 @@ import express from 'express';
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import cors from 'cors';
-import { LeaderboardManager } from './state.js';
-import { WSMessage, PurchaseEvent, OverlayConfig } from './types.js';
+import { RaidBossManager } from './state.js';
+import { WSMessage, RaidConfig, RaidTier } from './types.js';
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8080;
 
@@ -14,7 +14,7 @@ app.use(express.json());
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-const manager = new LeaderboardManager();
+const manager = new RaidBossManager();
 
 // Track Server-Sent Events (SSE) connections for OBS browser sources
 const sseClients = new Set<express.Response>();
@@ -50,27 +50,22 @@ function broadcast(msg: WSMessage) {
   }
 }
 
-function broadcastLeaderboardUpdate() {
-  const leaderboard = manager.getLeaderboard();
+function broadcastStateUpdate() {
   const state = manager.getState();
   broadcast({
-    type: 'LEADERBOARD_UPDATE',
-    payload: {
-      leaderboard,
-      totalPurchases: state.totalPurchases,
-      totalMana: state.totalMana,
-      config: state.config,
-      recentPurchases: state.recentPurchases
-    }
+    type: 'RAID_STATE_UPDATE',
+    payload: state
   });
 }
 
-// REST Endpoints
+// Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     connections: wss.clients.size,
     sseConnections: sseClients.size,
+    bossHp: manager.getState().boss.currentHp,
+    bossMaxHp: manager.getState().boss.maxHp,
     uptime: process.uptime()
   });
 });
@@ -85,17 +80,11 @@ app.get('/api/events', (req, res) => {
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
-  // Send initial full state immediately upon connection
+  // Send initial full state immediately
   const state = manager.getState();
   const initMsg = {
     type: 'INIT_STATE',
-    payload: {
-      leaderboard: manager.getLeaderboard(),
-      totalPurchases: state.totalPurchases,
-      totalMana: state.totalMana,
-      config: state.config,
-      recentPurchases: state.recentPurchases
-    },
+    payload: state,
     timestamp: Date.now()
   };
   res.write(`data: ${JSON.stringify(initMsg)}\n\n`);
@@ -103,7 +92,6 @@ app.get('/api/events', (req, res) => {
   sseClients.add(res);
   console.log(`[SSE] Client connected. Total SSE: ${sseClients.size}`);
 
-  // Heartbeat comment every 15s to keep connections alive through reverse proxies & OBS CEF
   const heartbeat = setInterval(() => {
     res.write(': keepalive\n\n');
   }, 15000);
@@ -115,97 +103,165 @@ app.get('/api/events', (req, res) => {
   });
 });
 
+// Full state endpoint
 app.get('/api/state', (req, res) => {
-  const state = manager.getState();
-  const leaderboard = manager.getLeaderboard();
   res.json({
     success: true,
-    state: {
-      ...state,
-      leaderboard
-    },
-    leaderboard,
-    totalPurchases: state.totalPurchases,
-    totalMana: state.totalMana,
-    config: state.config,
-    recentPurchases: state.recentPurchases
+    state: manager.getState()
   });
 });
 
-app.get('/api/leaderboard', (req, res) => {
-  res.json(manager.getLeaderboard());
-});
-
-app.post('/api/purchase', (req, res) => {
+/**
+ * Direct Stream Deck & Webhook HTTP Hit Endpoints:
+ * GET or POST /api/hit?tier=RARE&buyer=XYZ
+ * Optional query/body params: tier, buyer, damage, itemTitle, price
+ */
+const handleHitRequest = (req: express.Request, res: express.Response) => {
   try {
-    const { username, itemTitle, price, quantity, customMana } = req.body;
-    if (!username) {
-      return res.status(400).json({ error: 'Username is required' });
-    }
+    const buyer = (req.query.buyer as string) || req.body?.buyer || (req.query.user as string) || req.body?.user || 'StreamRaider';
+    const tier = (req.query.tier as string) || req.body?.tier || 'RARE';
+    const rawDamage = req.query.damage ? parseInt(req.query.damage as string, 10) : req.body?.damage;
+    const itemTitle = (req.query.item as string) || req.body?.itemTitle || 'Stream Purchase';
+    const price = (req.query.price as string) || req.body?.price;
 
-    const result = manager.recordPurchase({
-      username,
+    const result = manager.recordHit({
+      buyer,
+      tier: tier as RaidTier,
+      customDamage: rawDamage,
       itemTitle,
-      price,
-      quantity: quantity ? parseInt(quantity, 10) : 1,
-      customMana: customMana ? parseInt(customMana, 10) : undefined
+      price
     });
 
-    // Broadcast alerts
+    console.log(
+      `[Hit Event] 💥 ${result.event.buyer} dealt ${result.event.totalDamage} DMG (${result.event.tier}) -> Boss HP: ${result.boss.currentHp}/${result.boss.maxHp}`
+    );
+
+    // Broadcast individual hit alert
     broadcast({
-      type: 'PURCHASE_ALERT',
+      type: 'HIT_ALERT',
       payload: result.event
     });
 
-    if (result.isRankUp) {
-      broadcast({
-        type: 'RANK_UP_ALERT',
-        payload: {
-          username: result.event.username,
-          oldTier: result.oldTier,
-          newTier: result.newTier,
-          newRankTitle: result.newRankTitle,
-          purchaseEvent: result.event
-        }
-      });
-    }
-
     // Broadcast full updated state
-    broadcastLeaderboardUpdate();
+    broadcastStateUpdate();
 
-    return res.json({ success: true, ...result });
-  } catch (error: any) {
-    console.error('[API] Purchase error:', error);
-    return res.status(500).json({ error: error.message || 'Internal Server Error' });
+    return res.json({
+      success: true,
+      hit: result.event,
+      boss: result.boss,
+      isDefeated: result.isDefeated,
+      isPhase2: result.isPhase2
+    });
+  } catch (err: any) {
+    console.error('[API Hit Error]', err);
+    return res.status(500).json({ error: err.message || 'Internal Hit Error' });
   }
-});
+};
 
-app.post('/api/reset', (req, res) => {
-  const state = manager.resetSession();
-  broadcastLeaderboardUpdate();
-  res.json({ success: true, message: 'Session reset', state });
-});
+app.get('/api/hit', handleHitRequest);
+app.post('/api/hit', handleHitRequest);
+
+/**
+ * Shield Endpoints (GET & POST /api/shield?amount=100)
+ */
+const handleShieldRequest = (req: express.Request, res: express.Response) => {
+  const amount = req.query.amount ? parseInt(req.query.amount as string, 10) : req.body?.amount ? parseInt(req.body.amount, 10) : 100;
+  const boss = manager.addShield(amount);
+  console.log(`[Shield Event] 🛡️ Shield adjusted by +${amount} -> Total Shield: ${boss.shieldHp}`);
+  broadcastStateUpdate();
+  res.json({ success: true, shieldHp: boss.shieldHp, boss });
+};
+
+app.get('/api/shield', handleShieldRequest);
+app.post('/api/shield', handleShieldRequest);
+
+/**
+ * Undo Last Hit Endpoints (GET & POST /api/undo)
+ */
+const handleUndoRequest = (req: express.Request, res: express.Response) => {
+  const result = manager.undoLastHit();
+  console.log(`[Undo Event] ↩️ Last hit reverted! Success: ${result.success}`);
+  broadcastStateUpdate();
+  res.json({ success: result.success, undoneHit: result.undoneHit, state: manager.getState() });
+};
+
+app.get('/api/undo', handleUndoRequest);
+app.post('/api/undo', handleUndoRequest);
+
+/**
+ * Enrage Toggle Endpoints (GET & POST /api/enrage?active=true)
+ */
+const handleEnrageRequest = (req: express.Request, res: express.Response) => {
+  const activeParam = req.query.active !== undefined ? req.query.active === 'true' : req.body?.active;
+  const boss = manager.toggleEnrage(activeParam);
+  console.log(`[Enrage Event] ⚡ Enrage set to ${boss.isEnraged}`);
+  broadcastStateUpdate();
+  res.json({ success: true, isEnraged: boss.isEnraged, phase: boss.phase, boss });
+};
+
+app.get('/api/enrage', handleEnrageRequest);
+app.post('/api/enrage', handleEnrageRequest);
+
+/**
+ * Reset Raid Endpoints (GET & POST /api/reset?hp=3000)
+ */
+const handleResetRequest = (req: express.Request, res: express.Response) => {
+  const hp = req.query.hp ? parseInt(req.query.hp as string, 10) : req.body?.hp;
+  const bossName = (req.query.boss as string) || req.body?.bossName;
+  const kgaTitle = (req.query.kga as string) || req.body?.kgaTitle;
+
+  const state = manager.resetRaid({ hp, bossName, kgaTitle });
+  console.log(`[Reset Event] 🔄 Raid Boss Reset! Max HP: ${state.boss.maxHp}`);
+  broadcastStateUpdate();
+  res.json({ success: true, message: 'Raid boss reset to full HP', state });
+};
+
+app.get('/api/reset', handleResetRequest);
+app.post('/api/reset', handleResetRequest);
+
+/**
+ * Sound Config Toggle Endpoints (GET & POST /api/sound?enabled=true)
+ */
+const handleSoundRequest = (req: express.Request, res: express.Response) => {
+  const enabled = req.query.enabled !== undefined ? req.query.enabled === 'true' : req.body?.enabled;
+  const volume = req.query.volume ? parseFloat(req.query.volume as string) : req.body?.volume;
+  const config = manager.updateConfig({
+    ...(enabled !== undefined ? { soundEnabled: enabled } : {}),
+    ...(volume !== undefined ? { soundVolume: volume } : {})
+  });
+  broadcastStateUpdate();
+  res.json({ success: true, soundEnabled: config.soundEnabled, soundVolume: config.soundVolume });
+};
+
+app.get('/api/sound', handleSoundRequest);
+app.post('/api/sound', handleSoundRequest);
+
+/**
+ * KGA Reward update (GET & POST /api/kga)
+ */
+const handleKgaRequest = (req: express.Request, res: express.Response) => {
+  const title = (req.query.title as string) || req.body?.title;
+  const subtitle = (req.query.subtitle as string) || req.body?.subtitle;
+  const code = (req.query.code as string) || req.body?.code;
+  const isRevealed = req.query.revealed !== undefined ? req.query.revealed === 'true' : req.body?.isRevealed;
+
+  const kga = manager.updateKga({
+    ...(title ? { title } : {}),
+    ...(subtitle ? { subtitle } : {}),
+    ...(code ? { code } : {}),
+    ...(isRevealed !== undefined ? { isRevealed } : {})
+  });
+  broadcastStateUpdate();
+  res.json({ success: true, kga });
+};
+
+app.get('/api/kga', handleKgaRequest);
+app.post('/api/kga', handleKgaRequest);
 
 app.post('/api/config', (req, res) => {
   const newConfig = manager.updateConfig(req.body);
-  broadcastLeaderboardUpdate();
+  broadcastStateUpdate();
   res.json({ success: true, config: newConfig });
-});
-
-app.post('/api/adjust', (req, res) => {
-  const { username, purchases, mana } = req.body;
-  if (!username) {
-    return res.status(400).json({ error: 'Username is required' });
-  }
-  const profile = manager.manualAdjust(username, purchases, mana);
-  broadcastLeaderboardUpdate();
-  res.json({ success: true, profile });
-});
-
-app.delete('/api/buyer/:username', (req, res) => {
-  manager.deleteUser(req.params.username);
-  broadcastLeaderboardUpdate();
-  res.json({ success: true });
 });
 
 // WebSocket Connection Handling
@@ -217,13 +273,7 @@ wss.on('connection', (ws, req) => {
   const state = manager.getState();
   const initMsg: WSMessage = {
     type: 'INIT_STATE',
-    payload: {
-      leaderboard: manager.getLeaderboard(),
-      totalPurchases: state.totalPurchases,
-      totalMana: state.totalMana,
-      config: state.config,
-      recentPurchases: state.recentPurchases
-    },
+    payload: state,
     timestamp: Date.now()
   };
   ws.send(JSON.stringify(initMsg));
@@ -234,72 +284,61 @@ wss.on('connection', (ws, req) => {
       const msg: WSMessage = JSON.parse(raw);
 
       switch (msg.type) {
-        case 'NEW_PURCHASE': {
-          const { username, itemTitle, price, quantity, customMana } = msg.payload;
-          if (!username) break;
+        case 'RAID_HIT': {
+          const { buyer, tier, customDamage, itemTitle, price } = msg.payload || {};
+          if (!buyer) break;
 
-          const result = manager.recordPurchase({
-            username,
+          const result = manager.recordHit({
+            buyer,
+            tier,
+            customDamage,
             itemTitle,
-            price,
-            quantity,
-            customMana
+            price
           });
 
-          console.log(
-            `[WS Event] Purchase by @${result.event.username} (${result.event.quantity}x, Rank: ${result.event.newRankTitle})`
-          );
-
           broadcast({
-            type: 'PURCHASE_ALERT',
+            type: 'HIT_ALERT',
             payload: result.event
           });
 
-          if (result.isRankUp) {
-            broadcast({
-              type: 'RANK_UP_ALERT',
-              payload: {
-                username: result.event.username,
-                oldTier: result.oldTier,
-                newTier: result.newTier,
-                newRankTitle: result.newRankTitle,
-                purchaseEvent: result.event
-              }
-            });
-          }
-
-          broadcastLeaderboardUpdate();
+          broadcastStateUpdate();
           break;
         }
 
-        case 'RESET_SESSION': {
-          manager.resetSession();
-          console.log('[WS Event] Session reset requested');
-          broadcastLeaderboardUpdate();
+        case 'UNDO_HIT': {
+          manager.undoLastHit();
+          broadcastStateUpdate();
+          break;
+        }
+
+        case 'SHIELD_BOSS': {
+          const amount = msg.payload?.amount || 100;
+          manager.addShield(amount);
+          broadcastStateUpdate();
+          break;
+        }
+
+        case 'TOGGLE_ENRAGE': {
+          manager.toggleEnrage(msg.payload?.active);
+          broadcastStateUpdate();
+          break;
+        }
+
+        case 'RESET_RAID': {
+          manager.resetRaid(msg.payload);
+          broadcastStateUpdate();
           break;
         }
 
         case 'UPDATE_CONFIG': {
-          manager.updateConfig(msg.payload as Partial<OverlayConfig>);
-          console.log('[WS Event] Config updated');
-          broadcastLeaderboardUpdate();
+          manager.updateConfig(msg.payload as Partial<RaidConfig>);
+          broadcastStateUpdate();
           break;
         }
 
-        case 'MANUAL_ADJUST': {
-          const { username, purchases, mana } = msg.payload;
-          if (username) {
-            manager.manualAdjust(username, purchases, mana);
-            broadcastLeaderboardUpdate();
-          }
-          break;
-        }
-
-        case 'DELETE_USER': {
-          if (msg.payload?.username) {
-            manager.deleteUser(msg.payload.username);
-            broadcastLeaderboardUpdate();
-          }
+        case 'UPDATE_KGA': {
+          manager.updateKga(msg.payload);
+          broadcastStateUpdate();
           break;
         }
 
@@ -327,8 +366,9 @@ wss.on('connection', (ws, req) => {
 
 server.listen(PORT, () => {
   console.log(`=======================================================`);
-  console.log(`🔮 Whatnot Mana-Leaderboard Relay Server running!`);
-  console.log(`📡 HTTP Server: http://localhost:${PORT}`);
-  console.log(`⚡ WebSocket:   ws://localhost:${PORT}`);
+  console.log(`⚔️  Whatnot RPG Raid Boss Relay Server running!`);
+  console.log(`📡 HTTP API:  http://localhost:${PORT}`);
+  console.log(`⚡ WebSocket: ws://localhost:${PORT}`);
+  console.log(`🎯 Hit API:   http://localhost:${PORT}/api/hit?tier=RARE&buyer=Hero`);
   console.log(`=======================================================`);
 });

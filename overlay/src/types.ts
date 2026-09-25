@@ -1,86 +1,112 @@
-export type CardRarity = 'rare' | 'epic' | 'legendary';
+export type RaidTier = 'RARE' | 'EPIC' | 'LEGENDARY' | 'CUSTOM';
 
-export interface RankTier {
-  tier: number;
-  title: string;
-  minPurchases: number;
-  color: string;
-  glowColor: string;
-  badge: string;
-  description: string;
-}
-
-export interface BuyerProfile {
-  username: string;
-  purchaseCount: number;
-  mana: number;
-  tier: number;
-  rankTitle: string;
-  rankColor: string;
-  rankBadge: string;
-  lastPurchaseTimestamp: number;
-  lastItemTitle?: string;
-  lastPrice?: string;
-  lastRarity?: CardRarity;
-  totalSpent?: number;
-}
-
-export interface LeaderboardEntry extends BuyerProfile {
-  position: number;
-  progressToNextTier: number; // 0 to 100
-  nextTierTitle?: string;
-  purchasesNeededForNextTier?: number;
-  streakMultiplier?: number;
-}
-
-export interface PurchaseEvent {
+export interface RaidHitEvent {
   id: string;
-  username: string;
+  buyer: string;
+  tier: RaidTier;
+  rawDamage: number;
+  comboMultiplier: number;
+  totalDamage: number;
+  shieldAbsorbed: number;
+  hpDamage: number;
+  isCrit: boolean;
+  comboCount: number;
+  timestamp: number;
   itemTitle?: string;
   price?: string;
-  priceNum?: number;
-  quantity?: number;
-  timestamp: number;
-  rarity?: CardRarity;
-  baseMana?: number;
-  priceBonus?: number;
-  streakMultiplier?: number;
-  currentStreak?: number;
-  manaGained: number;
-  isRankUp?: boolean;
-  oldTier?: number;
-  newTier?: number;
-  newRankTitle?: string;
+  previousHp: number;
+  newHp: number;
+  previousShield: number;
+  newShield: number;
+  triggeredPhase2?: boolean;
+  triggeredDefeat?: boolean;
 }
 
-export interface OverlayConfig {
+export interface UnlockedKGA {
+  title: string;
+  subtitle: string;
+  code: string;
+  isRevealed: boolean;
+  itemImage?: string;
+}
+
+export interface BossState {
+  id: string;
+  name: string;
+  title: string;
+  avatarUrl: string;
+  maxHp: number;
+  currentHp: number;
+  shieldHp: number;
+  maxShieldHp: number;
+  isEnraged: boolean;
+  isDefeated: boolean;
+  phase: 1 | 2;
+  unlockedKga: UnlockedKGA;
+}
+
+export interface AttackerStats {
+  username: string;
+  totalDamage: number;
+  hitCount: number;
+  lastHitTimestamp: number;
+  highestCrit: number;
+  rank: number;
+  percentage: number;
+}
+
+export interface RaidConfig {
   overlayTitle: string;
-  streamerName: string;
-  maxDisplayCount: number;
   soundEnabled: boolean;
   soundVolume: number;
-  manaMultiplier: number;
-  ranks: RankTier[];
+  rareDamage: number;
+  epicDamage: number;
+  legendaryDamage: number;
+  bossMaxHp: number;
+  kgaRewardTitle: string;
+  kgaRewardSubtitle: string;
+  kgaRewardCode: string;
 }
 
-export interface LeaderboardState {
-  leaderboard: LeaderboardEntry[];
-  totalPurchases: number;
-  totalMana: number;
-  config: OverlayConfig;
-  recentPurchases: PurchaseEvent[];
+export interface CurrentCombo {
+  count: number;
+  multiplier: number;
+  lastBuyer: string;
+  expiresAt: number;
+}
+
+export interface RaidStateSnapshot {
+  boss: BossState;
+  attackers: Record<string, AttackerStats>;
+  totalDamageDealt: number;
+  totalHits: number;
+  currentCombo: CurrentCombo;
+  lastHitEvent?: RaidHitEvent;
+}
+
+export interface RaidState {
+  boss: BossState;
+  attackers: Record<string, AttackerStats>;
+  topAttackers: AttackerStats[];
+  recentHits: RaidHitEvent[];
+  config: RaidConfig;
+  totalDamageDealt: number;
+  totalHits: number;
+  currentCombo: CurrentCombo;
+  sessionStartTime: number;
 }
 
 export type WSMessageType =
   | 'INIT_STATE'
-  | 'NEW_PURCHASE'
-  | 'LEADERBOARD_UPDATE'
-  | 'PURCHASE_ALERT'
-  | 'RANK_UP_ALERT'
-  | 'RESET_SESSION'
+  | 'RAID_STATE_UPDATE'
+  | 'RAID_HIT'
+  | 'HIT_ALERT'
+  | 'UNDO_HIT'
+  | 'SHIELD_BOSS'
+  | 'TOGGLE_ENRAGE'
+  | 'RESET_RAID'
   | 'UPDATE_CONFIG'
-  | 'MANUAL_ADJUST'
-  | 'DELETE_USER'
+  | 'UPDATE_KGA'
   | 'PING'
   | 'PONG';
 

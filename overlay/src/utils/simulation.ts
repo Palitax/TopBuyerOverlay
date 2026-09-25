@@ -1,262 +1,274 @@
-import { LeaderboardState, PurchaseEvent, CardRarity, RankTier, LeaderboardEntry, BuyerProfile } from '../types';
-import { RankUpEventPayload } from '../hooks/useWebSocket';
+import { RaidState, RaidHitEvent, RaidTier, BossState } from '../types';
 
-export const DEFAULT_RANKS: RankTier[] = [
-  { tier: 1, title: 'Novize', minPurchases: 1, color: '#94a3b8', glowColor: 'rgba(148, 163, 184, 0.5)', badge: '📜', description: 'Beginnt die arkanen Künste des Sammelns.' },
-  { tier: 2, title: 'Adept', minPurchases: 2, color: '#10b981', glowColor: 'rgba(16, 185, 129, 0.6)', badge: '🧪', description: 'Beherrscht grundlegende Mana-Flüsse.' },
-  { tier: 3, title: 'Akolyth', minPurchases: 3, color: '#38bdf8', glowColor: 'rgba(56, 189, 248, 0.7)', badge: '⚡', description: 'Kanalisiert pure elektrische Mana-Energie.' },
-  { tier: 4, title: 'Magister', minPurchases: 6, color: '#c084fc', glowColor: 'rgba(192, 132, 252, 0.8)', badge: '🔮', description: 'Ein wahrer Meister der Arkanmagie.' },
-  { tier: 5, title: 'Erzmagus', minPurchases: 10, color: '#fbbf24', glowColor: 'rgba(251, 191, 36, 0.9)', badge: '🌟', description: 'Legende des Streams. Grenzenlose Mana-Macht.' }
-];
+export const DEFAULT_DEMO_BOSS: BossState = {
+  id: 'boss_vodkor',
+  name: "VOD'KOR DER INFERNO-FÜRST",
+  title: 'Höllenschmied des Untergangs • World Boss',
+  avatarUrl: '/boss.png',
+  maxHp: 3000,
+  currentHp: 3000,
+  shieldHp: 0,
+  maxShieldHp: 1000,
+  isEnraged: false,
+  isDefeated: false,
+  phase: 1,
+  unlockedKga: {
+    title: 'KGA #01 UNLOCKED: MYSTERY VMAX SLAB',
+    subtitle: 'Raid erfolgreich abgeschlossen! Neues KGA freigeschaltet.',
+    code: 'KGA-RAID-VICTORY',
+    isRevealed: false,
+    itemImage: '/boss.png'
+  }
+};
 
-export function getInitialDemoState(): LeaderboardState {
-  const initialBuyers: LeaderboardEntry[] = [
-    {
-      username: 'ShadowBinder',
-      purchaseCount: 3,
-      mana: 534,
-      tier: 5,
-      rankTitle: 'Erzmagus',
-      rankColor: '#fbbf24',
-      rankBadge: '🌟',
-      lastPurchaseTimestamp: Date.now() - 60000,
-      lastItemTitle: 'Lugia Alternate Art',
-      lastPrice: '80.00 €',
-      lastRarity: 'epic',
-      totalSpent: 160,
-      position: 1,
-      progressToNextTier: 100,
-      purchasesNeededForNextTier: 0,
-      streakMultiplier: 1.1
+export const getInitialDemoState = (): RaidState => ({
+  boss: { ...DEFAULT_DEMO_BOSS, unlockedKga: { ...DEFAULT_DEMO_BOSS.unlockedKga } },
+  attackers: {
+    ShadowSlayer: {
+      username: 'ShadowSlayer',
+      totalDamage: 450,
+      hitCount: 3,
+      lastHitTimestamp: Date.now() - 120000,
+      highestCrit: 250,
+      rank: 1,
+      percentage: 53
     },
-    {
-      username: 'CardCollector99',
-      purchaseCount: 2,
-      mana: 350,
-      tier: 4,
-      rankTitle: 'Magister',
-      rankColor: '#c084fc',
-      rankBadge: '🔮',
-      lastPurchaseTimestamp: Date.now() - 30000,
-      lastItemTitle: 'Charizard EX',
-      lastPrice: '50.00 €',
-      lastRarity: 'epic',
-      totalSpent: 52.5,
-      position: 2,
-      progressToNextTier: 65,
-      nextTierTitle: 'Erzmagus',
-      purchasesNeededForNextTier: 3,
-      streakMultiplier: 1.0
+    FireMage99: {
+      username: 'FireMage99',
+      totalDamage: 250,
+      hitCount: 1,
+      lastHitTimestamp: Date.now() - 80000,
+      highestCrit: 250,
+      rank: 2,
+      percentage: 29
     },
-    {
-      username: 'DragonSlayer',
-      purchaseCount: 1,
-      mana: 100,
-      tier: 3,
-      rankTitle: 'Akolyth',
-      rankColor: '#38bdf8',
-      rankBadge: '⚡',
-      lastPurchaseTimestamp: Date.now() - 90000,
-      lastItemTitle: 'Trainer Bulk Card',
-      lastPrice: '2.50 €',
-      lastRarity: 'rare',
-      totalSpent: 2.5,
-      position: 3,
-      progressToNextTier: 40,
-      nextTierTitle: 'Magister',
-      purchasesNeededForNextTier: 2,
-      streakMultiplier: 1.0
+    CardCollector: {
+      username: 'CardCollector',
+      totalDamage: 150,
+      hitCount: 1,
+      lastHitTimestamp: Date.now() - 30000,
+      highestCrit: 150,
+      rank: 3,
+      percentage: 18
     }
-  ];
+  },
+  topAttackers: [
+    {
+      username: 'ShadowSlayer',
+      totalDamage: 450,
+      hitCount: 3,
+      lastHitTimestamp: Date.now() - 120000,
+      highestCrit: 250,
+      rank: 1,
+      percentage: 53
+    },
+    {
+      username: 'FireMage99',
+      totalDamage: 250,
+      hitCount: 1,
+      lastHitTimestamp: Date.now() - 80000,
+      highestCrit: 250,
+      rank: 2,
+      percentage: 29
+    },
+    {
+      username: 'CardCollector',
+      totalDamage: 150,
+      hitCount: 1,
+      lastHitTimestamp: Date.now() - 30000,
+      highestCrit: 150,
+      rank: 3,
+      percentage: 18
+    }
+  ],
+  recentHits: [],
+  config: {
+    overlayTitle: '🔥 COMMUNITY RAID BOSS BATTLE 🔥',
+    soundEnabled: true,
+    soundVolume: 0.8,
+    rareDamage: 100,
+    epicDamage: 250,
+    legendaryDamage: 500,
+    bossMaxHp: 3000,
+    kgaRewardTitle: 'KGA #01 UNLOCKED: MYSTERY VMAX SLAB',
+    kgaRewardSubtitle: 'Herzlichen Glückwunsch an den Raid! KGA ist freigeschaltet!',
+    kgaRewardCode: 'KGA-RAID-VICTORY'
+  },
+  totalDamageDealt: 850,
+  totalHits: 5,
+  currentCombo: {
+    count: 0,
+    multiplier: 1.0,
+    lastBuyer: '',
+    expiresAt: 0
+  },
+  sessionStartTime: Date.now()
+});
+
+export function simulateClientHit(
+  currentState: RaidState,
+  params: {
+    buyer: string;
+    tier?: RaidTier | string;
+    customDamage?: number;
+    itemTitle?: string;
+    price?: string;
+  }
+): { event: RaidHitEvent; nextState: RaidState; isDefeated: boolean; isPhase2: boolean } {
+  const cleanBuyer = (params.buyer || 'Hero').trim().replace(/^@/, '');
+  let tier: RaidTier = 'RARE';
+  if (params.tier) {
+    const upper = params.tier.toUpperCase();
+    if (upper === 'EPIC') tier = 'EPIC';
+    else if (upper === 'LEGENDARY' || upper === 'GRAIL') tier = 'LEGENDARY';
+    else if (upper === 'CUSTOM') tier = 'CUSTOM';
+    else tier = 'RARE';
+  }
+
+  let baseDamage = 100;
+  if (params.customDamage && params.customDamage > 0) {
+    baseDamage = params.customDamage;
+  } else if (tier === 'LEGENDARY') {
+    baseDamage = currentState.config.legendaryDamage || 500;
+  } else if (tier === 'EPIC') {
+    baseDamage = currentState.config.epicDamage || 250;
+  } else {
+    baseDamage = currentState.config.rareDamage || 100;
+  }
+
+  const now = Date.now();
+  let comboCount = 1;
+  let comboMultiplier = 1.0;
+
+  if (currentState.currentCombo.expiresAt > now) {
+    comboCount = currentState.currentCombo.count + 1;
+  } else {
+    comboCount = 1;
+  }
+
+  if (comboCount >= 10) comboMultiplier = 1.3;
+  else if (comboCount >= 5) comboMultiplier = 1.2;
+  else if (comboCount >= 3) comboMultiplier = 1.1;
+  else comboMultiplier = 1.0;
+
+  const totalDamage = Math.round(baseDamage * comboMultiplier);
+  const isCrit = tier === 'LEGENDARY' || comboMultiplier >= 1.3;
+
+  const previousHp = currentState.boss.currentHp;
+  const previousShield = currentState.boss.shieldHp;
+
+  let shieldAbsorbed = 0;
+  let hpDamage = totalDamage;
+  let newShield = previousShield;
+
+  if (previousShield > 0) {
+    shieldAbsorbed = Math.min(previousShield, totalDamage);
+    newShield = previousShield - shieldAbsorbed;
+    hpDamage = totalDamage - shieldAbsorbed;
+  }
+
+  const newHp = Math.max(0, previousHp - hpDamage);
+  const isDefeated = newHp === 0;
+
+  const triggeredPhase2 =
+    !currentState.boss.isEnraged &&
+    currentState.boss.phase === 1 &&
+    newHp > 0 &&
+    newHp <= currentState.boss.maxHp * 0.5;
+
+  const newPhase: 1 | 2 = triggeredPhase2 || currentState.boss.phase === 2 ? 2 : 1;
+  const isEnraged = triggeredPhase2 || currentState.boss.isEnraged;
+
+  const updatedBoss: BossState = {
+    ...currentState.boss,
+    currentHp: newHp,
+    shieldHp: newShield,
+    isDefeated,
+    phase: newPhase,
+    isEnraged,
+    unlockedKga: {
+      ...currentState.boss.unlockedKga,
+      isRevealed: isDefeated ? true : currentState.boss.unlockedKga.isRevealed
+    }
+  };
+
+  const updatedAttackers = { ...currentState.attackers };
+  if (!updatedAttackers[cleanBuyer]) {
+    updatedAttackers[cleanBuyer] = {
+      username: cleanBuyer,
+      totalDamage: 0,
+      hitCount: 0,
+      lastHitTimestamp: now,
+      highestCrit: 0,
+      rank: 1,
+      percentage: 0
+    };
+  }
+
+  const attacker = { ...updatedAttackers[cleanBuyer] };
+  attacker.totalDamage += totalDamage;
+  attacker.hitCount += 1;
+  attacker.lastHitTimestamp = now;
+  if (totalDamage > attacker.highestCrit) attacker.highestCrit = totalDamage;
+  updatedAttackers[cleanBuyer] = attacker;
+
+  const totalDmgDealt = currentState.totalDamageDealt + totalDamage;
+  const totalHitsCount = currentState.totalHits + 1;
+
+  const attackersList = Object.values(updatedAttackers);
+  attackersList.sort((a, b) => {
+    if (b.totalDamage !== a.totalDamage) return b.totalDamage - a.totalDamage;
+    return a.lastHitTimestamp - b.lastHitTimestamp;
+  });
+
+  attackersList.forEach((att, idx) => {
+    att.rank = idx + 1;
+    att.percentage = Math.round((att.totalDamage / (totalDmgDealt || 1)) * 100);
+    updatedAttackers[att.username] = att;
+  });
+
+  const event: RaidHitEvent = {
+    id: `${now}-${Math.random().toString(36).substring(2, 8)}`,
+    buyer: cleanBuyer,
+    tier,
+    rawDamage: baseDamage,
+    comboMultiplier,
+    totalDamage,
+    shieldAbsorbed,
+    hpDamage,
+    isCrit,
+    comboCount,
+    timestamp: now,
+    itemTitle: params.itemTitle,
+    price: params.price,
+    previousHp,
+    newHp,
+    previousShield,
+    newShield,
+    triggeredPhase2,
+    triggeredDefeat: isDefeated
+  };
+
+  const nextState: RaidState = {
+    ...currentState,
+    boss: updatedBoss,
+    attackers: updatedAttackers,
+    topAttackers: attackersList.slice(0, 10),
+    recentHits: [event, ...currentState.recentHits.slice(0, 24)],
+    totalDamageDealt: totalDmgDealt,
+    totalHits: totalHitsCount,
+    currentCombo: {
+      count: comboCount,
+      multiplier: comboMultiplier,
+      lastBuyer: cleanBuyer,
+      expiresAt: now + 45000
+    }
+  };
 
   return {
-    leaderboard: initialBuyers,
-    totalPurchases: 6,
-    totalMana: 1050,
-    recentPurchases: [],
-    config: {
-      overlayTitle: '✨ Fantasy Mana Leaderboard ✨',
-      streamerName: 'Whatnot Streamer',
-      maxDisplayCount: 3,
-      soundEnabled: true,
-      soundVolume: 0.7,
-      manaMultiplier: 100,
-      ranks: DEFAULT_RANKS
-    }
+    event,
+    nextState,
+    isDefeated,
+    isPhase2: newPhase === 2
   };
-}
-
-export function parsePrice(price?: string | number): number {
-  if (typeof price === 'number') return Math.max(0, price);
-  if (!price || typeof price !== 'string') return 3.0;
-  const cleaned = price.replace(/[^\d.,]/g, '').replace(',', '.');
-  const parsed = parseFloat(cleaned);
-  return isNaN(parsed) || parsed <= 0 ? 3.0 : parsed;
-}
-
-export function getRarity(priceNum: number): CardRarity {
-  if (priceNum <= 5.0) return 'rare';
-  if (priceNum <= 100.0) return 'epic';
-  return 'legendary';
-}
-
-export function getBaseManaForRarity(rarity: CardRarity): number {
-  switch (rarity) {
-    case 'legendary':
-      return 500;
-    case 'epic':
-      return 250;
-    case 'rare':
-    default:
-      return 100;
-  }
-}
-
-export function getStreakMultiplier(purchaseCount: number): number {
-  if (purchaseCount >= 10) return 1.3; // +30% (3x Fire 🔥🔥🔥)
-  if (purchaseCount >= 5) return 1.2;  // +20% (2x Fire 🔥🔥)
-  if (purchaseCount >= 3) return 1.1;  // +10% (1x Fire 🔥)
-  return 1.0;
-}
-
-export function simulateClientPurchase(
-  currentState: LeaderboardState,
-  payload: { username: string; itemTitle?: string; price?: string | number; quantity?: number }
-): {
-  nextState: LeaderboardState;
-  event: PurchaseEvent;
-  isRankUp: boolean;
-  rankUpPayload?: RankUpEventPayload;
-} {
-  const username = payload.username.trim().replace(/^@/, '');
-  const priceNum = parsePrice(payload.price);
-  const quantity = Math.max(1, payload.quantity || 1);
-  const rarity = getRarity(priceNum);
-  const itemTitle = payload.itemTitle || (rarity === 'rare' ? 'Rare Booster Single' : rarity === 'epic' ? 'Epic Card Slab' : 'Legendary 1st Edition');
-
-  const existingIndex = currentState.leaderboard.findIndex(
-    (b) => b.username.toLowerCase() === username.toLowerCase()
-  );
-  const existing = existingIndex !== -1 ? currentState.leaderboard[existingIndex] : null;
-
-  const newPurchaseCount = (existing ? existing.purchaseCount : 0) + quantity;
-  const streakMultiplier = getStreakMultiplier(newPurchaseCount);
-  const baseManaPerUnit = getBaseManaForRarity(rarity);
-  const baseMana = baseManaPerUnit * quantity;
-  const manaGained = Math.round(baseMana * streakMultiplier);
-
-  const newTotalMana = (existing ? existing.mana : 0) + manaGained;
-  const newTotalSpent = (existing ? existing.totalSpent || 0 : 0) + priceNum * quantity;
-
-  const event: PurchaseEvent = {
-    id: `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
-    username,
-    itemTitle,
-    price: typeof payload.price === 'string' ? payload.price : `${priceNum.toFixed(2)} €`,
-    priceNum,
-    quantity,
-    timestamp: Date.now(),
-    rarity,
-    baseMana,
-    streakMultiplier,
-    currentStreak: newPurchaseCount,
-    manaGained
-  };
-
-  const buyersMap = new Map<string, BuyerProfile>();
-  currentState.leaderboard.forEach((b) => {
-    buyersMap.set(b.username.toLowerCase(), { ...b });
-  });
-
-  const updatedProfile: BuyerProfile = {
-    username: existing ? existing.username : username,
-    purchaseCount: newPurchaseCount,
-    mana: newTotalMana,
-    tier: existing ? existing.tier : 1,
-    rankTitle: existing ? existing.rankTitle : 'Novize',
-    rankColor: existing ? existing.rankColor : '#94a3b8',
-    rankBadge: existing ? existing.rankBadge : '📜',
-    lastPurchaseTimestamp: Date.now(),
-    lastItemTitle: itemTitle,
-    lastPrice: event.price,
-    lastRarity: rarity,
-    totalSpent: newTotalSpent
-  };
-  buyersMap.set(username.toLowerCase(), updatedProfile);
-
-  const sorted = Array.from(buyersMap.values()).sort((a, b) => {
-    if (b.mana !== a.mana) return b.mana - a.mana;
-    return a.lastPurchaseTimestamp - b.lastPurchaseTimestamp;
-  });
-
-  let isRankUp = false;
-  let rankUpPayload: RankUpEventPayload | undefined;
-
-  const newLeaderboard: LeaderboardEntry[] = sorted.map((profile, idx) => {
-    const position = idx + 1;
-    let rankInfo = DEFAULT_RANKS[0];
-    if (position === 1) rankInfo = DEFAULT_RANKS[4];
-    else if (position === 2) rankInfo = DEFAULT_RANKS[3];
-    else if (position === 3) rankInfo = DEFAULT_RANKS[2];
-
-    const oldTier = profile.tier;
-    const newTier = rankInfo.tier;
-
-    if (profile.username.toLowerCase() === username.toLowerCase() && newTier > oldTier) {
-      isRankUp = true;
-      event.isRankUp = true;
-      event.oldTier = oldTier;
-      event.newTier = newTier;
-      event.newRankTitle = rankInfo.title;
-
-      rankUpPayload = {
-        username: profile.username,
-        oldTier,
-        newTier,
-        newRankTitle: rankInfo.title,
-        purchaseEvent: event
-      };
-    }
-
-    let progressToNextTier = 100;
-    let nextTierTitle: string | undefined;
-    let purchasesNeededForNextTier = 0;
-
-    if (position === 3) {
-      const leaderAhead = sorted[1];
-      const gap = leaderAhead ? leaderAhead.mana - profile.mana : 100;
-      progressToNextTier = Math.min(95, Math.max(15, Math.round(100 - (gap / (gap + profile.mana)) * 100)));
-      nextTierTitle = 'Magister';
-      purchasesNeededForNextTier = 1;
-    } else if (position === 2) {
-      const leaderAhead = sorted[0];
-      const gap = leaderAhead ? leaderAhead.mana - profile.mana : 100;
-      progressToNextTier = Math.min(95, Math.max(20, Math.round(100 - (gap / (gap + profile.mana)) * 100)));
-      nextTierTitle = 'Erzmagus';
-      purchasesNeededForNextTier = 2;
-    }
-
-    return {
-      ...profile,
-      position,
-      tier: newTier,
-      rankTitle: rankInfo.title,
-      rankColor: rankInfo.color,
-      rankBadge: rankInfo.badge,
-      progressToNextTier,
-      nextTierTitle,
-      purchasesNeededForNextTier,
-      streakMultiplier: getStreakMultiplier(profile.purchaseCount)
-    };
-  });
-
-  const nextState: LeaderboardState = {
-    ...currentState,
-    leaderboard: newLeaderboard,
-    totalPurchases: currentState.totalPurchases + quantity,
-    totalMana: currentState.totalMana + manaGained,
-    recentPurchases: [event, ...currentState.recentPurchases.slice(0, 19)]
-  };
-
-  return { nextState, event, isRankUp, rankUpPayload };
 }

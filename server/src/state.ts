@@ -1,353 +1,319 @@
 import {
-  BuyerProfile,
-  CardRarity,
-  LeaderboardEntry,
-  LeaderboardState,
-  OverlayConfig,
-  PurchaseEvent,
-  RankTier
+  RaidState,
+  RaidConfig,
+  BossState,
+  RaidHitEvent,
+  RaidTier,
+  AttackerStats,
+  RaidStateSnapshot,
+  UnlockedKGA
 } from './types.js';
 import {
-  loadState,
-  saveState,
-  getDefaultState,
-  RANK_ERZMAGUS,
-  RANK_MAGISTER,
-  RANK_AKOLYTH,
-  RANK_NOVIZE
+  loadRaidState,
+  saveRaidState,
+  getDefaultRaidState,
+  DEFAULT_BOSS
 } from './storage.js';
 
-export function parsePrice(price?: string | number): number {
-  if (typeof price === 'number') {
-    return Math.max(0, price);
-  }
-  if (!price || typeof price !== 'string') {
-    return 3.0; // Default to typical 3€ rare card
-  }
-  // Strip non-numeric chars except . and ,
-  const cleaned = price.replace(/[^\d.,]/g, '').replace(',', '.');
-  const parsed = parseFloat(cleaned);
-  return isNaN(parsed) || parsed <= 0 ? 3.0 : parsed;
-}
+const COMBO_EXPIRY_MS = 45000; // 45 seconds combo window
 
-export function getRarity(priceNum: number): CardRarity {
-  if (priceNum <= 5.0) {
-    return 'rare';
-  }
-  if (priceNum <= 100.0) {
-    return 'epic';
-  }
-  return 'legendary';
-}
-
-export function getBaseManaForRarity(rarity: CardRarity): number {
-  switch (rarity) {
-    case 'legendary':
-      return 500;
-    case 'epic':
-      return 250;
-    case 'rare':
-    default:
-      return 100;
-  }
-}
-
-export function getStreakMultiplier(purchaseCount: number): number {
-  if (purchaseCount >= 10) {
-    return 1.3; // +30% Stream-Legende (3x Fire 🔥🔥🔥)
-  }
-  if (purchaseCount >= 5) {
-    return 1.2; // +20% Power-Supporter (2x Fire 🔥🔥)
-  }
-  if (purchaseCount >= 3) {
-    return 1.1; // +10% Combo-Streak (1x Fire 🔥)
-  }
-  return 1.0;
-}
-
-export class LeaderboardManager {
-  private state: LeaderboardState;
+export class RaidBossManager {
+  private state: RaidState;
+  private undoStack: RaidStateSnapshot[] = [];
 
   constructor() {
-    this.state = loadState();
-    this.recalculateAllRanks();
+    this.state = loadRaidState();
+    this.recalculateLeaderboard();
   }
 
-  public getState(): LeaderboardState {
+  public getState(): RaidState {
     return this.state;
   }
 
-  public getConfig(): OverlayConfig {
+  public getConfig(): RaidConfig {
     return this.state.config;
   }
 
-  public updateConfig(newConfig: Partial<OverlayConfig>): OverlayConfig {
+  public updateConfig(newConfig: Partial<RaidConfig>): RaidConfig {
     this.state.config = {
       ...this.state.config,
       ...newConfig
     };
-    this.recalculateAllRanks();
+    if (newConfig.bossMaxHp && newConfig.bossMaxHp !== this.state.boss.maxHp) {
+      const ratio = this.state.boss.currentHp / this.state.boss.maxHp;
+      this.state.boss.maxHp = newConfig.bossMaxHp;
+      this.state.boss.currentHp = Math.round(newConfig.bossMaxHp * ratio);
+    }
     this.persist();
     return this.state.config;
   }
 
-  public resetSession(): LeaderboardState {
-    this.state = {
-      ...getDefaultState(),
-      config: this.state.config
+  public updateKga(kga: Partial<UnlockedKGA>): UnlockedKGA {
+    this.state.boss.unlockedKga = {
+      ...this.state.boss.unlockedKga,
+      ...kga
     };
+    this.persist();
+    return this.state.boss.unlockedKga;
+  }
+
+  public resetRaid(options?: { hp?: number; bossName?: string; kgaTitle?: string }): RaidState {
+    const maxHp = options?.hp || this.state.config.bossMaxHp || 3000;
+    this.state = {
+      ...getDefaultRaidState(),
+      config: this.state.config,
+      boss: {
+        ...DEFAULT_BOSS,
+        name: options?.bossName || DEFAULT_BOSS.name,
+        maxHp: maxHp,
+        currentHp: maxHp,
+        shieldHp: 0,
+        isDefeated: false,
+        isEnraged: false,
+        phase: 1,
+        unlockedKga: {
+          ...DEFAULT_BOSS.unlockedKga,
+          title: options?.kgaTitle || this.state.config.kgaRewardTitle || DEFAULT_BOSS.unlockedKga.title,
+          isRevealed: false
+        }
+      }
+    };
+    this.undoStack = [];
     this.persist();
     return this.state;
   }
 
-  /**
-   * Returns exclusive rank by position:
-   * Position 1 -> Erzmagus
-   * Position 2 -> Magister
-   * Position 3 -> Akolyth
-   * Position 4+ -> Novize
-   */
-  public getRankForPosition(position: number): RankTier {
-    switch (position) {
-      case 1:
-        return RANK_ERZMAGUS;
-      case 2:
-        return RANK_MAGISTER;
-      case 3:
-        return RANK_AKOLYTH;
-      default:
-        return RANK_NOVIZE;
+  public addShield(amount: number = 100): BossState {
+    this.saveSnapshot();
+    const maxShield = this.state.boss.maxShieldHp || 2000;
+    this.state.boss.shieldHp = Math.min(maxShield, Math.max(0, this.state.boss.shieldHp + amount));
+    this.persist();
+    return this.state.boss;
+  }
+
+  public toggleEnrage(forceActive?: boolean): BossState {
+    this.saveSnapshot();
+    const nextEnraged = forceActive !== undefined ? forceActive : !this.state.boss.isEnraged;
+    this.state.boss.isEnraged = nextEnraged;
+    if (nextEnraged) {
+      this.state.boss.phase = 2;
+    }
+    this.persist();
+    return this.state.boss;
+  }
+
+  private saveSnapshot(lastHit?: RaidHitEvent) {
+    const snapshot: RaidStateSnapshot = {
+      boss: JSON.parse(JSON.stringify(this.state.boss)),
+      attackers: JSON.parse(JSON.stringify(this.state.attackers)),
+      totalDamageDealt: this.state.totalDamageDealt,
+      totalHits: this.state.totalHits,
+      currentCombo: { ...this.state.currentCombo },
+      lastHitEvent: lastHit
+    };
+    this.undoStack.push(snapshot);
+    if (this.undoStack.length > 20) {
+      this.undoStack.shift();
     }
   }
 
-  private getSortedBuyersList(): BuyerProfile[] {
-    const buyers = Object.values(this.state.buyers);
-    // Sort descending by mana (or purchaseCount), then on tie earlier buyer stays ahead
-    buyers.sort((a, b) => {
-      if (b.mana !== a.mana) {
-        return b.mana - a.mana;
-      }
-      if (b.purchaseCount !== a.purchaseCount) {
-        return b.purchaseCount - a.purchaseCount;
-      }
-      return a.lastPurchaseTimestamp - b.lastPurchaseTimestamp;
-    });
-    return buyers;
+  public undoLastHit(): { success: boolean; undoneHit?: RaidHitEvent } {
+    if (this.undoStack.length === 0) {
+      return { success: false };
+    }
+    const snapshot = this.undoStack.pop()!;
+    this.state.boss = snapshot.boss;
+    this.state.attackers = snapshot.attackers;
+    this.state.totalDamageDealt = snapshot.totalDamageDealt;
+    this.state.totalHits = snapshot.totalHits;
+    this.state.currentCombo = snapshot.currentCombo;
+    
+    if (this.state.recentHits.length > 0) {
+      this.state.recentHits.shift();
+    }
+
+    this.recalculateLeaderboard();
+    this.persist();
+    return { success: true, undoneHit: snapshot.lastHitEvent };
   }
 
-  private recalculateAllRanks() {
-    const sorted = this.getSortedBuyersList();
-    sorted.forEach((buyer, index) => {
-      const pos = index + 1;
-      const rank = this.getRankForPosition(pos);
-      buyer.tier = rank.tier;
-      buyer.rankTitle = rank.title;
-      buyer.rankColor = rank.color;
-      buyer.rankBadge = rank.badge;
-      this.state.buyers[buyer.username] = buyer;
-    });
-  }
-
-  /**
-   * Process an incoming purchase event with Rarity, Square-Root Value Damping & Combo Streak.
-   */
-  public recordPurchase(params: {
-    username: string;
+  public recordHit(params: {
+    buyer: string;
+    tier?: RaidTier | string;
+    customDamage?: number;
     itemTitle?: string;
-    price?: string | number;
-    quantity?: number;
-    customMana?: number;
-  }): { event: PurchaseEvent; isRankUp: boolean; oldTier: number; newTier: number; newRankTitle: string } {
-    const rawUsername = params.username.trim();
-    if (!rawUsername) {
-      throw new Error('Username is required');
+    price?: string;
+  }): { event: RaidHitEvent; boss: BossState; isDefeated: boolean; isPhase2: boolean } {
+    const cleanBuyer = (params.buyer || 'Hero').trim().replace(/^@/, '');
+    if (!cleanBuyer) {
+      throw new Error('Buyer username is required');
     }
-    const username = rawUsername.startsWith('@') ? rawUsername.substring(1) : rawUsername;
 
-    const quantity = Math.max(1, params.quantity || 1);
-    const priceNum = parsePrice(params.price);
-    const rarity = getRarity(priceNum);
+    // Determine Tier & Base Damage
+    let tier: RaidTier = 'RARE';
+    if (params.tier) {
+      const upper = params.tier.toUpperCase();
+      if (upper === 'EPIC') tier = 'EPIC';
+      else if (upper === 'LEGENDARY' || upper === 'GRAIL') tier = 'LEGENDARY';
+      else if (upper === 'CUSTOM') tier = 'CUSTOM';
+      else tier = 'RARE';
+    }
 
-    const existing = this.state.buyers[username];
-    const oldTier = existing ? existing.tier : 0;
-    const oldPurchases = existing ? existing.purchaseCount : 0;
-    const newPurchases = oldPurchases + quantity;
-
-    // Calculate Flat Mana Points per Rarity (Rare 100, Epic 250, Legendary 500)
-    const baseManaPerUnit = getBaseManaForRarity(rarity);
-    const baseMana = baseManaPerUnit * quantity;
-    const streakMultiplier = getStreakMultiplier(newPurchases);
-
-    let manaGain: number;
-    if (params.customMana !== undefined && params.customMana > 0) {
-      manaGain = params.customMana;
+    let baseDamage = 100;
+    if (params.customDamage && params.customDamage > 0) {
+      baseDamage = params.customDamage;
+    } else if (tier === 'LEGENDARY') {
+      baseDamage = this.state.config.legendaryDamage || 500;
+    } else if (tier === 'EPIC') {
+      baseDamage = this.state.config.epicDamage || 250;
     } else {
-      manaGain = Math.round(baseMana * streakMultiplier);
+      baseDamage = this.state.config.rareDamage || 100;
     }
 
-    const newTotalMana = (existing ? existing.mana : 0) + manaGain;
-    const newTotalSpent = (existing ? (existing.totalSpent || 0) : 0) + (priceNum * quantity);
+    // Combo system
+    const now = Date.now();
+    let comboCount = 1;
+    let comboMultiplier = 1.0;
 
-    // Update Buyer Profile
-    this.state.buyers[username] = {
-      username,
-      purchaseCount: newPurchases,
-      mana: newTotalMana,
-      tier: existing ? existing.tier : 1,
-      rankTitle: existing ? existing.rankTitle : 'Novize',
-      rankColor: existing ? existing.rankColor : RANK_NOVIZE.color,
-      rankBadge: existing ? existing.rankBadge : RANK_NOVIZE.badge,
-      lastPurchaseTimestamp: Date.now(),
-      lastItemTitle: params.itemTitle || existing?.lastItemTitle,
-      lastPrice: typeof params.price === 'string' ? params.price : `${priceNum.toFixed(2)} €`,
-      lastRarity: rarity,
-      totalSpent: newTotalSpent
+    if (this.state.currentCombo.expiresAt > now) {
+      comboCount = this.state.currentCombo.count + 1;
+    } else {
+      comboCount = 1;
+    }
+
+    if (comboCount >= 10) {
+      comboMultiplier = 1.3;
+    } else if (comboCount >= 5) {
+      comboMultiplier = 1.2;
+    } else if (comboCount >= 3) {
+      comboMultiplier = 1.1;
+    } else {
+      comboMultiplier = 1.0;
+    }
+
+    this.state.currentCombo = {
+      count: comboCount,
+      multiplier: comboMultiplier,
+      lastBuyer: cleanBuyer,
+      expiresAt: now + COMBO_EXPIRY_MS
     };
 
-    // Re-evaluate positions & exclusive ranks for everyone
-    this.recalculateAllRanks();
+    const isCrit = tier === 'LEGENDARY' || comboMultiplier >= 1.3;
+    const totalDamage = Math.round(baseDamage * comboMultiplier);
 
-    const updatedProfile = this.state.buyers[username];
-    const newTier = updatedProfile.tier;
-    const isRankUp = newTier > oldTier && oldTier > 0;
+    // Save snapshot for undo BEFORE mutating HP
+    this.saveSnapshot();
 
-    this.state.totalPurchases += quantity;
-    this.state.totalMana += manaGain;
+    const previousHp = this.state.boss.currentHp;
+    const previousShield = this.state.boss.shieldHp;
 
-    const event: PurchaseEvent = {
-      id: `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
-      username,
+    // Apply against shield first, then HP
+    let shieldAbsorbed = 0;
+    let hpDamage = totalDamage;
+
+    if (this.state.boss.shieldHp > 0) {
+      shieldAbsorbed = Math.min(this.state.boss.shieldHp, totalDamage);
+      this.state.boss.shieldHp -= shieldAbsorbed;
+      hpDamage = totalDamage - shieldAbsorbed;
+    }
+
+    const newHp = Math.max(0, this.state.boss.currentHp - hpDamage);
+    this.state.boss.currentHp = newHp;
+
+    const triggeredPhase2 =
+      !this.state.boss.isEnraged &&
+      this.state.boss.phase === 1 &&
+      newHp > 0 &&
+      newHp <= this.state.boss.maxHp * 0.5;
+
+    if (triggeredPhase2) {
+      this.state.boss.phase = 2;
+      this.state.boss.isEnraged = true;
+    }
+
+    const triggeredDefeat = previousHp > 0 && newHp === 0;
+    if (triggeredDefeat) {
+      this.state.boss.isDefeated = true;
+      this.state.boss.unlockedKga.isRevealed = true;
+    }
+
+    // Update attacker stats
+    if (!this.state.attackers[cleanBuyer]) {
+      this.state.attackers[cleanBuyer] = {
+        username: cleanBuyer,
+        totalDamage: 0,
+        hitCount: 0,
+        lastHitTimestamp: now,
+        highestCrit: 0,
+        rank: 1,
+        percentage: 0
+      };
+    }
+
+    const attacker = this.state.attackers[cleanBuyer];
+    attacker.totalDamage += totalDamage;
+    attacker.hitCount += 1;
+    attacker.lastHitTimestamp = now;
+    if (totalDamage > attacker.highestCrit) {
+      attacker.highestCrit = totalDamage;
+    }
+
+    this.state.totalDamageDealt += totalDamage;
+    this.state.totalHits += 1;
+
+    const event: RaidHitEvent = {
+      id: `${now}-${Math.random().toString(36).substring(2, 8)}`,
+      buyer: cleanBuyer,
+      tier,
+      rawDamage: baseDamage,
+      comboMultiplier,
+      totalDamage,
+      shieldAbsorbed,
+      hpDamage,
+      isCrit,
+      comboCount,
+      timestamp: now,
       itemTitle: params.itemTitle,
-      price: typeof params.price === 'string' ? params.price : `${priceNum.toFixed(2)} €`,
-      priceNum,
-      quantity,
-      timestamp: Date.now(),
-      rarity,
-      baseMana,
-      streakMultiplier,
-      currentStreak: newPurchases,
-      manaGained: manaGain,
-      isRankUp,
-      oldTier,
-      newTier,
-      newRankTitle: updatedProfile.rankTitle
+      price: params.price,
+      previousHp,
+      newHp,
+      previousShield,
+      newShield: this.state.boss.shieldHp,
+      triggeredPhase2,
+      triggeredDefeat
     };
 
-    this.state.recentPurchases = [event, ...this.state.recentPurchases.slice(0, 29)];
+    this.state.recentHits = [event, ...this.state.recentHits.slice(0, 24)];
+
+    this.recalculateLeaderboard();
     this.persist();
 
     return {
       event,
-      isRankUp,
-      oldTier,
-      newTier,
-      newRankTitle: updatedProfile.rankTitle
+      boss: this.state.boss,
+      isDefeated: this.state.boss.isDefeated,
+      isPhase2: this.state.boss.phase === 2
     };
   }
 
-  /**
-   * Manual override of a buyer's purchases or mana.
-   */
-  public manualAdjust(username: string, purchases: number, mana?: number): BuyerProfile {
-    const cleanUsername = username.startsWith('@') ? username.substring(1) : username;
-    const newPurchases = Math.max(0, purchases);
-    const calculatedMana = mana ?? newPurchases * (this.state.config.manaMultiplier || 100);
-
-    this.state.buyers[cleanUsername] = {
-      username: cleanUsername,
-      purchaseCount: newPurchases,
-      mana: calculatedMana,
-      tier: 1,
-      rankTitle: 'Novize',
-      rankColor: RANK_NOVIZE.color,
-      rankBadge: RANK_NOVIZE.badge,
-      lastPurchaseTimestamp: this.state.buyers[cleanUsername]?.lastPurchaseTimestamp || Date.now()
-    };
-
-    this.recalculateAllRanks();
-    this.recalculateTotals();
-    this.persist();
-    return this.state.buyers[cleanUsername];
-  }
-
-  public deleteUser(username: string): void {
-    const cleanUsername = username.startsWith('@') ? username.substring(1) : username;
-    delete this.state.buyers[cleanUsername];
-    this.recalculateAllRanks();
-    this.recalculateTotals();
-    this.persist();
-  }
-
-  private recalculateTotals() {
-    let totalPurchases = 0;
-    let totalMana = 0;
-    for (const buyer of Object.values(this.state.buyers)) {
-      totalPurchases += buyer.purchaseCount;
-      totalMana += buyer.mana;
-    }
-    this.state.totalPurchases = totalPurchases;
-    this.state.totalMana = totalMana;
-  }
-
-  /**
-   * Get sorted Leaderboard with dynamic overtaking / dethroning progress calculation based on Mana.
-   */
-  public getLeaderboard(): LeaderboardEntry[] {
-    const sortedBuyers = this.getSortedBuyersList();
-
-    return sortedBuyers.map((buyer, index) => {
-      const position = index + 1;
-      const rank = this.getRankForPosition(position);
-      const streakMultiplier = getStreakMultiplier(buyer.purchaseCount);
-
-      let progress = 100;
-      let purchasesNeeded = 0;
-      let nextTierTitle: string | undefined = undefined;
-
-      if (position === 1) {
-        progress = 100;
-        purchasesNeeded = 0;
-        nextTierTitle = undefined;
-      } else if (position === 2) {
-        const targetBuyer = sortedBuyers[0]; // Platz 1
-        const targetMana = targetBuyer.mana;
-        const manaNeeded = Math.max(1, (targetMana + 1) - buyer.mana);
-        // Average mana per purchase (~120 MP) to estimate purchases needed
-        purchasesNeeded = Math.max(1, Math.ceil(manaNeeded / 120));
-        progress = Math.min(95, Math.max(8, Math.round((buyer.mana / (targetMana + 1)) * 100)));
-        nextTierTitle = 'Erzmagus';
-      } else if (position === 3) {
-        const targetBuyer = sortedBuyers[1]; // Platz 2
-        const targetMana = targetBuyer.mana;
-        const manaNeeded = Math.max(1, (targetMana + 1) - buyer.mana);
-        purchasesNeeded = Math.max(1, Math.ceil(manaNeeded / 120));
-        progress = Math.min(95, Math.max(8, Math.round((buyer.mana / (targetMana + 1)) * 100)));
-        nextTierTitle = 'Magister';
-      } else {
-        const targetBuyer = sortedBuyers[2]; // Platz 3
-        const targetMana = targetBuyer ? targetBuyer.mana : 100;
-        const manaNeeded = Math.max(1, (targetMana + 1) - buyer.mana);
-        purchasesNeeded = Math.max(1, Math.ceil(manaNeeded / 120));
-        progress = Math.min(95, Math.max(8, Math.round((buyer.mana / (targetMana + 1)) * 100)));
-        nextTierTitle = 'Akolyth';
-      }
-
-      return {
-        ...buyer,
-        position,
-        tier: rank.tier,
-        rankTitle: rank.title,
-        rankColor: rank.color,
-        rankBadge: rank.badge,
-        progressToNextTier: progress,
-        nextTierTitle,
-        purchasesNeededForNextTier: purchasesNeeded,
-        streakMultiplier
-      };
+  private recalculateLeaderboard() {
+    const attackersList = Object.values(this.state.attackers);
+    attackersList.sort((a, b) => {
+      if (b.totalDamage !== a.totalDamage) return b.totalDamage - a.totalDamage;
+      return a.lastHitTimestamp - b.lastHitTimestamp;
     });
+
+    const totalDmg = this.state.totalDamageDealt || 1;
+    attackersList.forEach((att, idx) => {
+      att.rank = idx + 1;
+      att.percentage = Math.round((att.totalDamage / totalDmg) * 100);
+      this.state.attackers[att.username] = att;
+    });
+
+    this.state.topAttackers = attackersList.slice(0, 10);
   }
 
   private persist() {
-    saveState(this.state);
+    saveRaidState(this.state);
   }
 }

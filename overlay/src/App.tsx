@@ -1,31 +1,42 @@
 import React, { useState, useEffect } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
-import { ManaOverlay } from './components/ManaOverlay';
-import { ManaAlert } from './components/ManaAlert';
-import { AdminDeck } from './components/AdminDeck';
-import { Sparkles } from 'lucide-react';
+import { RaidOverlay } from './components/RaidOverlay';
+import { RaidAdminDeck } from './components/RaidAdminDeck';
+import { Shield, Swords } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
+    const pathname = window.location.pathname.toLowerCase();
+    const hash = window.location.hash.toLowerCase();
+    const searchMode = new URLSearchParams(window.location.search).get('mode');
     return (
-      window.location.hash === '#admin' ||
-      new URLSearchParams(window.location.search).get('mode') === 'admin'
+      pathname === '/admin' ||
+      pathname.endsWith('/admin') ||
+      hash === '#admin' ||
+      searchMode === 'admin'
     );
   });
 
-  const { status, state, latestPurchase, latestRankUp, sendMessage, clearAlerts } = useWebSocket();
+  const { status, state, latestHit, sendMessage } = useWebSocket();
 
   useEffect(() => {
-    const handleHashChange = () => {
+    const checkRoute = () => {
+      const pathname = window.location.pathname.toLowerCase();
+      const hash = window.location.hash.toLowerCase();
+      const searchMode = new URLSearchParams(window.location.search).get('mode');
       setIsAdmin(
-        window.location.hash === '#admin' ||
-        new URLSearchParams(window.location.search).get('mode') === 'admin'
+        pathname === '/admin' ||
+        pathname.endsWith('/admin') ||
+        hash === '#admin' ||
+        searchMode === 'admin'
       );
     };
 
+    window.addEventListener('hashchange', checkRoute);
+    window.addEventListener('popstate', checkRoute);
+
     // Keyboard shortcut: Press 'a' or 'A' to toggle admin mode easily without button on stream
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't trigger if user is typing in an input
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) {
         return;
       }
@@ -36,18 +47,25 @@ export const App: React.FC = () => {
       }
     };
 
-    window.addEventListener('hashchange', handleHashChange);
     window.addEventListener('keydown', handleKeyDown);
     return () => {
-      window.removeEventListener('hashchange', handleHashChange);
+      window.removeEventListener('hashchange', checkRoute);
+      window.removeEventListener('popstate', checkRoute);
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [isAdmin]);
 
   const toggleView = () => {
-    const newIsAdmin = !isAdmin;
-    setIsAdmin(newIsAdmin);
-    window.location.hash = newIsAdmin ? 'admin' : '';
+    const next = !isAdmin;
+    setIsAdmin(next);
+    if (next) {
+      window.location.hash = 'admin';
+    } else {
+      window.location.hash = '';
+      if (window.location.pathname === '/admin') {
+        window.history.pushState(null, '', '/');
+      }
+    }
   };
 
   if (isAdmin) {
@@ -56,32 +74,32 @@ export const App: React.FC = () => {
         {/* Floating Quick Switch Button back to Overlay */}
         <button
           onClick={toggleView}
-          className="fixed bottom-4 right-4 z-50 px-4 py-2 bg-gradient-to-r from-sky-500 to-purple-600 hover:from-sky-400 hover:to-purple-500 text-white rounded-xl shadow-2xl text-xs font-bold flex items-center gap-2 border border-sky-400/40 transition"
+          className="fixed bottom-4 right-4 z-50 px-4 py-2 bg-gradient-to-r from-amber-500 to-red-600 hover:from-amber-400 hover:to-red-500 text-black font-black rounded-xl shadow-2xl text-xs flex items-center gap-2 border border-amber-300 transition"
         >
-          <Sparkles className="w-4 h-4" />
+          <Swords className="w-4 h-4 fill-black" />
           <span>Zum OBS Overlay View</span>
         </button>
 
-        <AdminDeck state={state} status={status} onSendMessage={sendMessage} />
+        <RaidAdminDeck state={state} status={status} onSendMessage={sendMessage} />
       </div>
     );
   }
 
-  // Pure Transparent OBS Overlay View: Zero background boxes, zero stream clutter
+  // Pure Transparent OBS Overlay View: Zero stream clutter
   return (
-    <main className="min-h-screen w-full bg-transparent p-1.5 flex flex-col items-start justify-start relative select-none">
-      {/* Alert Popups & Confetti */}
-      <ManaAlert
-        purchase={latestPurchase}
-        rankUp={latestRankUp}
-        onDismiss={clearAlerts}
-        onDissolve={(purchase) => {
-          window.dispatchEvent(new CustomEvent('mana-alert-dissolve', { detail: purchase }));
-        }}
-      />
+    <main className="min-h-screen w-full bg-transparent p-2 flex flex-col items-start justify-start relative select-none">
+      {/* Floating Button for Testing Admin in Browser (Press 'A' or Click) */}
+      <button
+        onClick={toggleView}
+        title="Admin-Deck öffnen (oder Taste 'A' drücken)"
+        className="fixed bottom-2 right-2 opacity-20 hover:opacity-100 transition-opacity z-50 px-2.5 py-1 bg-slate-900/80 hover:bg-slate-800 text-slate-300 border border-slate-700 rounded-lg text-[10px] font-bold flex items-center gap-1.5"
+      >
+        <Shield className="w-3 h-3 text-amber-400" />
+        <span>Admin Deck</span>
+      </button>
 
-      {/* Main Leaderboard Widget */}
-      <ManaOverlay state={state} status={status} />
+      {/* Main Raid Boss Encounter Overlay */}
+      <RaidOverlay state={state} latestHit={latestHit} />
     </main>
   );
 };

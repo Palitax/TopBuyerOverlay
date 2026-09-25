@@ -1,0 +1,46 @@
+{
+  "boss": {
+    "id": "boss_vodkor",
+    "name": "VOD'KOR DER INFERNO-FÜRST",
+    "title": "Höllenschmied des Untergangs • World Boss",
+    "avatarUrl": "/boss.png",
+    "maxHp": 3000,
+    "currentHp": 3000,
+    "shieldHp": 0,
+    "maxShieldHp": 1000,
+    "isEnraged": false,
+    "isDefeated": false,
+    "phase": 1,
+    "unlockedKga": {
+      "title": "KGA #01 UNLOCKED: MYSTERY VMAX SLAB",
+      "subtitle": "Raid erfolgreich abgeschlossen! Neues KGA freigeschaltet.",
+      "code": "KGA-RAID-VICTORY",
+      "isRevealed": false,
+      "itemImage": "/boss.png"
+    }
+  },
+  "attackers": {},
+  "topAttackers": [],
+  "recentHits": [],
+  "config": {
+    "overlayTitle": "🔥 COMMUNITY RAID BOSS BATTLE 🔥",
+    "soundEnabled": true,
+    "soundVolume": 0.8,
+    "rareDamage": 100,
+    "epicDamage": 250,
+    "legendaryDamage": 500,
+    "bossMaxHp": 3000,
+    "kgaRewardTitle": "KGA #01 UNLOCKED: MYSTERY VMAX SLAB",
+    "kgaRewardSubtitle": "Herzlichen Glückwunsch an den Raid! KGA ist freigeschaltet!",
+    "kgaRewardCode": "KGA-RAID-VICTORY"
+  },
+  "totalDamageDealt": 0,
+  "totalHits": 0,
+  "currentCombo": {
+    "count": 0,
+    "multiplier": 1,
+    "lastBuyer": "",
+    "expiresAt": 0
+  },
+  "sessionStartTime": 1790367314471
+}
