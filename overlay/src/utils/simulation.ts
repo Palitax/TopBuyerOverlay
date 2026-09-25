@@ -32,7 +32,7 @@ export function getInitialDemoState(): LeaderboardState {
     {
       username: 'CardCollector99',
       purchaseCount: 2,
-      mana: 287,
+      mana: 350,
       tier: 4,
       rankTitle: 'Magister',
       rankColor: '#c084fc',
@@ -51,7 +51,7 @@ export function getInitialDemoState(): LeaderboardState {
     {
       username: 'DragonSlayer',
       purchaseCount: 1,
-      mana: 116,
+      mana: 100,
       tier: 3,
       rankTitle: 'Akolyth',
       rankColor: '#38bdf8',
@@ -72,7 +72,7 @@ export function getInitialDemoState(): LeaderboardState {
   return {
     leaderboard: initialBuyers,
     totalPurchases: 6,
-    totalMana: 937,
+    totalMana: 1050,
     recentPurchases: [],
     config: {
       overlayTitle: '✨ Fantasy Mana Leaderboard ✨',
@@ -100,10 +100,22 @@ export function getRarity(priceNum: number): CardRarity {
   return 'legendary';
 }
 
+export function getBaseManaForRarity(rarity: CardRarity): number {
+  switch (rarity) {
+    case 'legendary':
+      return 500;
+    case 'epic':
+      return 250;
+    case 'rare':
+    default:
+      return 100;
+  }
+}
+
 export function getStreakMultiplier(purchaseCount: number): number {
-  if (purchaseCount >= 10) return 1.3;
-  if (purchaseCount >= 5) return 1.2;
-  if (purchaseCount >= 3) return 1.1;
+  if (purchaseCount >= 10) return 1.3; // +30% (3x Fire 🔥🔥🔥)
+  if (purchaseCount >= 5) return 1.2;  // +20% (2x Fire 🔥🔥)
+  if (purchaseCount >= 3) return 1.1;  // +10% (1x Fire 🔥)
   return 1.0;
 }
 
@@ -129,9 +141,9 @@ export function simulateClientPurchase(
 
   const newPurchaseCount = (existing ? existing.purchaseCount : 0) + quantity;
   const streakMultiplier = getStreakMultiplier(newPurchaseCount);
-  const baseMana = 100 * quantity;
-  const priceBonus = Math.round(10 * Math.sqrt(priceNum) * quantity);
-  const manaGained = Math.round((baseMana + priceBonus) * streakMultiplier);
+  const baseManaPerUnit = getBaseManaForRarity(rarity);
+  const baseMana = baseManaPerUnit * quantity;
+  const manaGained = Math.round(baseMana * streakMultiplier);
 
   const newTotalMana = (existing ? existing.mana : 0) + manaGained;
   const newTotalSpent = (existing ? existing.totalSpent || 0 : 0) + priceNum * quantity;
@@ -146,7 +158,6 @@ export function simulateClientPurchase(
     timestamp: Date.now(),
     rarity,
     baseMana,
-    priceBonus,
     streakMultiplier,
     currentStreak: newPurchaseCount,
     manaGained

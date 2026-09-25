@@ -43,7 +43,7 @@ export interface PurchaseEvent {
   timestamp: number;
   rarity: CardRarity;
   baseMana: number;
-  priceBonus: number;
+  priceBonus?: number;
   streakMultiplier: number;
   currentStreak: number;
   manaGained: number;

@@ -40,15 +40,27 @@ export function getRarity(priceNum: number): CardRarity {
   return 'legendary';
 }
 
+export function getBaseManaForRarity(rarity: CardRarity): number {
+  switch (rarity) {
+    case 'legendary':
+      return 500;
+    case 'epic':
+      return 250;
+    case 'rare':
+    default:
+      return 100;
+  }
+}
+
 export function getStreakMultiplier(purchaseCount: number): number {
   if (purchaseCount >= 10) {
-    return 1.3; // +30% Stream-Legende
+    return 1.3; // +30% Stream-Legende (3x Fire 🔥🔥🔥)
   }
   if (purchaseCount >= 5) {
-    return 1.2; // +20% Power-Supporter
+    return 1.2; // +20% Power-Supporter (2x Fire 🔥🔥)
   }
   if (purchaseCount >= 3) {
-    return 1.1; // +10% Combo-Streak
+    return 1.1; // +10% Combo-Streak (1x Fire 🔥)
   }
   return 1.0;
 }
@@ -161,16 +173,16 @@ export class LeaderboardManager {
     const oldPurchases = existing ? existing.purchaseCount : 0;
     const newPurchases = oldPurchases + quantity;
 
-    // Calculate Mana Points with Square-Root Damping & Streak
-    const baseMana = this.state.config.manaMultiplier || 100;
-    const priceBonus = Math.round(10 * Math.sqrt(priceNum));
+    // Calculate Flat Mana Points per Rarity (Rare 100, Epic 250, Legendary 500)
+    const baseManaPerUnit = getBaseManaForRarity(rarity);
+    const baseMana = baseManaPerUnit * quantity;
     const streakMultiplier = getStreakMultiplier(newPurchases);
 
     let manaGain: number;
     if (params.customMana !== undefined && params.customMana > 0) {
       manaGain = params.customMana;
     } else {
-      manaGain = Math.round((baseMana + priceBonus) * streakMultiplier * quantity);
+      manaGain = Math.round(baseMana * streakMultiplier);
     }
 
     const newTotalMana = (existing ? existing.mana : 0) + manaGain;
@@ -212,7 +224,6 @@ export class LeaderboardManager {
       timestamp: Date.now(),
       rarity,
       baseMana,
-      priceBonus,
       streakMultiplier,
       currentStreak: newPurchases,
       manaGained: manaGain,

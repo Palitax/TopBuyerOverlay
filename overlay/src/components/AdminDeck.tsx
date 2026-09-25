@@ -50,7 +50,7 @@ export const AdminDeck: React.FC<AdminDeckProps> = ({ state, status, onSendMessa
 
   const previewPriceNum = getPriceNum(customPrice);
   const previewRarity = previewPriceNum <= 5 ? 'rare' : previewPriceNum <= 100 ? 'epic' : 'legendary';
-  const previewBonus = Math.round(10 * Math.sqrt(previewPriceNum));
+  const previewBaseMana = previewRarity === 'legendary' ? 500 : previewRarity === 'epic' ? 250 : 100;
 
   const handleSimulateRandom = (rarityType?: 'rare' | 'epic' | 'legendary') => {
     const randomUsers = [
@@ -165,7 +165,7 @@ export const AdminDeck: React.FC<AdminDeckProps> = ({ state, status, onSendMessa
               </span>
             </div>
             <p className="text-slate-400 text-sm mt-1">
-              3 Rarity-Stufen (Rare 1-5€, Epic 5-100€, Legendary &gt;100€) mit Wurzel-Dämpfung & Combo-Streak
+              Feste Punkte: Rare (100 MP), Epic (250 MP), Grail (500 MP) + Combo-Streak (🔥 x1.1 - x1.3)
             </p>
           </div>
 
@@ -205,26 +205,35 @@ export const AdminDeck: React.FC<AdminDeckProps> = ({ state, status, onSendMessa
               <button
                 type="button"
                 onClick={() => handleSimulateRandom('rare')}
-                className="py-1.5 px-2 bg-sky-950/60 hover:bg-sky-900/70 border border-sky-500/40 text-sky-300 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition"
+                className="py-1.5 px-2 bg-sky-950/60 hover:bg-sky-900/70 border border-sky-500/40 text-sky-300 rounded-lg text-xs font-bold flex flex-col items-center justify-center gap-0.5 transition"
               >
-                <Zap className="w-3 h-3 text-sky-400" />
-                <span>🔵 Rare (2€)</span>
+                <div className="flex items-center gap-1">
+                  <Zap className="w-3 h-3 text-sky-400" />
+                  <span>🔵 Rare</span>
+                </div>
+                <span className="text-[10px] text-sky-400/80 font-mono font-normal">100 MP (&le;5€)</span>
               </button>
               <button
                 type="button"
                 onClick={() => handleSimulateRandom('epic')}
-                className="py-1.5 px-2 bg-purple-950/60 hover:bg-purple-900/70 border border-purple-500/40 text-purple-300 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition"
+                className="py-1.5 px-2 bg-purple-950/60 hover:bg-purple-900/70 border border-purple-500/40 text-purple-300 rounded-lg text-xs font-bold flex flex-col items-center justify-center gap-0.5 transition"
               >
-                <Sparkles className="w-3 h-3 text-purple-400" />
-                <span>🟣 Epic (35€)</span>
+                <div className="flex items-center gap-1">
+                  <Sparkles className="w-3 h-3 text-purple-400" />
+                  <span>🟣 Epic</span>
+                </div>
+                <span className="text-[10px] text-purple-400/80 font-mono font-normal">250 MP (5-100€)</span>
               </button>
               <button
                 type="button"
                 onClick={() => handleSimulateRandom('legendary')}
-                className="py-1.5 px-2 bg-amber-950/60 hover:bg-amber-900/70 border border-amber-500/40 text-amber-300 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition"
+                className="py-1.5 px-2 bg-amber-950/60 hover:bg-amber-900/70 border border-amber-500/40 text-amber-300 rounded-lg text-xs font-bold flex flex-col items-center justify-center gap-0.5 transition"
               >
-                <Gem className="w-3 h-3 text-amber-400" />
-                <span>🟡 Grail (150€)</span>
+                <div className="flex items-center gap-1">
+                  <Gem className="w-3 h-3 text-amber-400" />
+                  <span>🟡 Grail</span>
+                </div>
+                <span className="text-[10px] text-amber-400/80 font-mono font-normal">500 MP (&gt;100€)</span>
               </button>
             </div>
 
@@ -291,11 +300,14 @@ export const AdminDeck: React.FC<AdminDeckProps> = ({ state, status, onSendMessa
                         : 'text-sky-400 font-bold'
                     }
                   >
-                    {previewRarity.toUpperCase()}
+                    {previewRarity.toUpperCase()} ({previewBaseMana} MP)
                   </strong>
                 </span>
                 <span className="text-slate-400">
-                  Wert-Bonus: <strong className="text-amber-300 font-mono">+{previewBonus} MP</strong>
+                  Punkte:{' '}
+                  <strong className="text-cyan-300 font-mono font-bold">
+                    +{previewBaseMana * customQuantity} MP
+                  </strong>
                 </span>
               </div>
 

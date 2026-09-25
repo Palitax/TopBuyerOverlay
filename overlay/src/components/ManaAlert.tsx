@@ -219,11 +219,10 @@ export const ManaAlert: React.FC<ManaAlertProps> = ({
               </div>
 
               {/* Detailed Points Formula Breakdown */}
-              {(purchase.priceBonus !== undefined && purchase.priceBonus > 0) || isStreakActive ? (
+              {isStreakActive ? (
                 <div className="text-[8.5px] font-mono text-slate-400 flex items-center justify-between pt-1 border-t border-slate-800">
                   <span>
-                    100 Basis + {purchase.priceBonus || 0} Wert-Bonus
-                    {isStreakActive ? ` (x${purchase.streakMultiplier} Streak)` : ''}
+                    {purchase.baseMana || 100} MP Basis &times; {purchase.streakMultiplier} Streak-Bonus 🔥
                   </span>
                   <span className="text-amber-300 font-bold">+{purchase.manaGained} MP</span>
                 </div>
